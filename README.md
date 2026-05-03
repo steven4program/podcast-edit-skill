@@ -1,0 +1,201 @@
+# Podcast Edit
+
+> A podcast-editing agent built with Claude Code skills. From raw recording to publish-ready cut.
+
+## Why?
+
+Pain points of traditional podcast editors:
+
+1. **No semantic understanding**: pre-show prep, off-topic chit-chat, repeated content — these tools can't tell.
+2. **Manual editing is slow**: a 2-hour podcast needs hours of listening to find the issues.
+3. **Crude verbal-tic handling**: stutters, self-corrections, consecutive fillers — handled one at a time by hand.
+
+This agent uses Claude's semantic understanding for content analysis, Aliyun FunASR for transcription, and an interactive review page for human confirmation. AI-assisted end-to-end.
+
+## Result
+
+- 2–3 hour podcast → 3 minutes to transcribe + AI analysis + interactive review → final MP3
+- 98.8 % speaker-recognition accuracy (Aliyun FunASR)
+- Paragraph-level content trimming + word-level fine cut (stutters, self-corrections, fillers)
+- In-browser real-time playback with every edit applied instantly
+
+## Install
+
+### 1. Register skills
+
+```bash
+# Clone the project
+git clone <repo-url> /path/to/podcast-edit-skill
+
+# Register in Claude Code (create symlinks)
+SKILL_DIR="/path/to/podcast-edit-skill"   # adjust to your path
+mkdir -p ~/.claude/skills
+ln -s "$SKILL_DIR/install" ~/.claude/skills/podcast-edit-install
+ln -s "$SKILL_DIR/cut"     ~/.claude/skills/podcast-edit-cut
+ln -s "$SKILL_DIR/polish"  ~/.claude/skills/podcast-edit-polish
+ln -s "$SKILL_DIR/qa"      ~/.claude/skills/podcast-edit-qa
+```
+
+Verify: restart Claude Code and type `/` — `podcast-edit-install`, `podcast-edit-cut`, etc. should appear.
+
+### 2. Install dependencies
+
+```bash
+brew install node ffmpeg
+pip install librosa soundfile     # for the qa skill
+```
+
+### 3. Configure the Aliyun API key
+
+```bash
+cd /path/to/podcast-edit-skill
+cp .env.example .env
+# Edit .env, fill in your Aliyun DashScope API key
+# Get one at: https://dashscope.console.aliyun.com/
+```
+
+### 4. Use it
+
+In Claude Code:
+
+```
+/podcast-edit-cut your-audio-file.mp3
+```
+
+Detailed install steps: `/podcast-edit-install`.
+
+## Eight-stage pipeline
+
+```
+/podcast-edit-cut
+    │
+    │  Stage 1: user start
+    │  ├─ new user: sample learning / questionnaire
+    │  └─ existing user: one-line confirmation
+    │
+    │  Stage 2: cut analysis
+    │  ├─ transcribe (Aliyun FunASR, ~3 min)
+    │  ├─ speaker recognition + sentence split
+    │  ├─ AI rough-cut (paragraph-level)
+    │  └─ AI fine-cut (word-level: stutter, self-correction, filler)
+    │
+    │  Stage 3: AI self-review
+    │  └─ review agent checks consistency, misdetection, sensitive words
+    │
+    │  Stage 4: user review
+    │  ├─ generate review page → open in browser
+    │  │   ┌──────────────────────────────────────┐
+    │  │   │  review page (review_enhanced.html)  │
+    │  │   │  - fine-cut player (real-time skip)  │
+    │  │   │  - sentence delete/restore, fine toggle │
+    │  │   │  - manual selection delete + AI feedback export │
+    │  │   └──────────────────────────────────────┘
+    │  ├─ user reviews + exports delete_segments_edited.json
+    │  └─ feedback learning → updates user prefs / editing rules
+    │
+    │  Stage 5: cut execution
+    │  ├─ cut_audio.py (sample-accurate WAV cut)
+    │  └─ trim_silences.py (final silence trim)
+    │
+/podcast-edit-qa
+    │  Stage 6: AI QA
+    │  ├─ Phase A: data layer (delete-segment correctness)
+    │  ├─ Phase B: signal layer (energy/spectrum/silence)
+    │  └─ Phase C: semantic layer (re-transcribe LCS align, optional)
+    │
+/podcast-edit-polish
+    │  Stage 7: post-production
+    │  ├─ highlight clips → intro teaser
+    │  ├─ intro/outro music
+    │  └─ chapter timestamps + titles + show notes
+    │
+    │  Stage 8: final user review
+    │  ├─ final page (review_final.html)
+    │  │   QA issues + clickable timestamps + confirm/flag
+    │  └─ feedback learning → updates editing rules / user prefs
+```
+
+## Skill list
+
+| Skill | Slash command | Function |
+| --- | --- | --- |
+| install | `/podcast-edit-install` | register skills, install deps, configure API key |
+| cut | `/podcast-edit-cut` | the 8-stage orchestrator: transcribe + analyze + review + cut + final review |
+| qa | `/podcast-edit-qa` | three-phase QA: data + signal + semantic |
+| polish | `/podcast-edit-polish` | highlight teaser, intro music, chapter timestamps, titles, show notes |
+
+## Directory layout
+
+```
+podcast-edit-skill/
+├── README.md
+├── CLAUDE.md
+├── .env.example
+├── install/                       # install skill
+│   └── SKILL.md
+├── cut/                           # core skill (stages 1-5, 8)
+│   ├── SKILL.md                   # full pipeline doc (8 stages)
+│   ├── scripts/
+│   │   ├── aliyun_funasr_transcribe.sh
+│   │   ├── identify_speakers.js
+│   │   ├── generate_subtitles_from_aliyun.js
+│   │   ├── generate_sentences.js
+│   │   ├── generate_review_enhanced.js
+│   │   ├── generate_review_final.js
+│   │   ├── capture_final_feedback.js
+│   │   ├── cut_audio.py
+│   │   ├── trim_silences.py
+│   │   ├── merge_llm_fine.js
+│   │   └── user_manager.js
+│   ├── templates/
+│   │   └── review_enhanced.html
+│   ├── editing-rules/             # shared rules (every user)
+│   │   ├── 1-core-principles.md
+│   │   ├── 2-filler-detection.md
+│   │   ├── ...
+│   │   └── 10-content-analysis-methodology.md
+│   └── user-prefs/                # personal prefs (per-user)
+│       ├── default/
+│       └── <userId>/
+├── polish/                        # final-polish skill (stage 7)
+│   ├── SKILL.md
+│   └── scripts/
+│       └── mix_highlights_with_music.py
+├── qa/                            # qa skill (stage 6)
+│   ├── SKILL.md
+│   └── scripts/
+│       ├── signal_analysis.py
+│       ├── semantic_review.js
+│       ├── audit_cut.js
+│       └── report_generator.py
+└── output/                        # output directory (auto-created)
+    └── YYYY-MM-DD_<audio>/
+        └── cut/
+            ├── 1_transcript/
+            ├── 2_analysis/
+            ├── 3_output/
+            ├── review_enhanced.html
+            └── review_final.html
+```
+
+## Two-tier learning
+
+| Tier | Location | Content | When |
+| --- | --- | --- | --- |
+| Editing rules | `cut/editing-rules/` | detection algorithms, common thresholds, methodology | algorithmic gaps found by QA |
+| User prefs | `cut/user-prefs/<userId>/` | aggressiveness, per-token keep/delete | user review feedback |
+
+Feedback is captured at three points — Stage 4 (user review), Stage 6 (AI QA), Stage 8 (final review) — and persisted to skill files, so it works across machines and accounts.
+
+## Dependencies
+
+| Dep | Purpose | Install |
+| --- | --- | --- |
+| Node.js | run scripts | `brew install node` |
+| FFmpeg | audio processing | `brew install ffmpeg` |
+| Python 3 | audio cutting | macOS built-in |
+| Aliyun DashScope API | speech recognition + diarization | [get a key](https://dashscope.console.aliyun.com/) |
+
+## License
+
+MIT
