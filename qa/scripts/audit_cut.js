@@ -1,29 +1,29 @@
 #!/usr/bin/env node
 /**
- * audit_cut.js — edit质检脚本
+ * audit_cut.js — edit-quality audit script
  *
- * 在Cut complete后自动审查 delete_segments，发现以下Issue：
- *   1. restore完整性：restore sentencewhether被任何 delete segment 覆盖
- *   2. use 户手动delete生效性：use 户标记 deletewhether都有OK应 segment
- *   3. 切点silencedetect：相邻切点之间whether有可能产生听感pause silence
- *   4. 大segmentdelete衔接：>5s  delete前后文本whether自然衔接
+ * Run automatically after a cut to inspect delete_segments and surface:
+ *   1. Restore integrity: are restored sentences accidentally covered by any delete segment?
+ *   2. Manual-deletion effectiveness: do user-marked deletions all have corresponding segments?
+ *   3. Cut-point silence detection: do back-to-back cuts produce audible silent pauses?
+ *   4. Large-deletion stitching: do deletions >5s join naturally before/after?
  *
  * Usage:
  *   node audit_cut.js <output_dir>
  *
- * 例:
+ * Example:
  *   node audit_cut.js output/2026-02-27_meeting_02
  *
- * inputfile (自动在 output_dir 下find):
- *   - 2_analysis/delete_segments_edited.json ( or  delete_segments.json)
+ * Input files (auto-discovered under output_dir):
+ *   - 2_analysis/delete_segments_edited.json (or delete_segments.json)
  *   - 2_analysis/fine_analysis.json
  *   - 2_analysis/sentences.txt
  *   - 1_transcript/subtitles_words.json
- *   - ai_feedback (optional，e.g.有 restore/correction info)
+ *   - ai_feedback (optional, when restore/correction info exists)
  *
- * output:
- *   - 2_analysis/audit_report.json — 机器可读 完整报告
- *   - stdout — 人类可读 摘要
+ * Outputs:
+ *   - 2_analysis/audit_report.json — machine-readable full report
+ *   - stdout — human-readable summary
  */
 
 const fs = require('fs');
@@ -39,7 +39,7 @@ if (!outputDir) {
 const analysisDir = path.join(outputDir, '2_analysis');
 const transcriptDir = path.join(outputDir, '1_transcript');
 
-// --- 加载data ---
+// --- Data loading ---
 function loadJSON(filePath) {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
@@ -51,13 +51,13 @@ function loadJSON(filePath) {
 function loadSegments() {
   let data = loadJSON(path.join(analysisDir, 'delete_segments_edited.json'))
     || loadJSON(path.join(analysisDir, 'delete_segments.json'));
-  if (!data) { console.error('not found delete_segments file'); process.exit(1); }
+  if (!data) { console.error('找不到 delete_segments 檔案'); process.exit(1); }
   return Array.isArray(data) ? data : (data.segments || data.delete_segments || []);
 }
 
 function loadWords() {
   const data = loadJSON(path.join(transcriptDir, 'subtitles_words.json'));
-  if (!data) { console.error('not found subtitles_words.json'); process.exit(1); }
+  if (!data) { console.error('找不到 subtitles_words.json'); process.exit(1); }
   return Array.isArray(data) ? data : (data.words || []);
 }
 
@@ -77,10 +77,10 @@ function loadSentences() {
 }
 
 function loadFeedback() {
-  // 尝试multi种可能 feedbackfilepath
+  // Try multiple candidate feedback file paths
   const candidates = [
     ...fs.readdirSync(analysisDir).filter(f => f.startsWith('ai_feedback')).map(f => path.join(analysisDir, f)),
-    // 也检查uploaddirectory
+    // Also check the upload directory
   ];
   for (const fp of candidates) {
     const data = loadJSON(fp);
@@ -97,7 +97,7 @@ const edits = fineAnalysis ? (fineAnalysis.edits || []) : [];
 const feedback = loadFeedback();
 const corrections = loadJSON(path.join(analysisDir, 'segment_corrections.json'));
 
-// --- 辅助function ---
+// --- Helpers ---
 function wordTime(wordIdx) {
   const w = words[wordIdx];
   if (!w) return { start: 0, end: 0 };
@@ -122,20 +122,23 @@ function wordsInRange(startTime, endTime) {
   }).map(w => w.text || w.word || w.w || '');
 }
 
-// --- 检查 1: restore完整性 ---
+// --- Check 1: restore integrity ---
 //
-// 核心逻辑：restore = use 户想keep sentence，但sentence内  fine edit（e.g.口吃、fillerdelete）
-// 仍然是有意keep 。所以只needs检查：
-//   a) 被"非本 fine edit"  segment 覆盖（跨误伤）
-//   b) 被"非 fine edit 来源"  segment 覆盖（e.g.旧 HTML 导出  wholeSentence segment）
+// Core logic: a "restore" means the user wants to keep the sentence, but in-sentence
+// fine edits (deleting stutters, fillers, etc.) inside that sentence are still
+// intentional. So we only need to flag segments that:
+//   a) Are NOT this fine edit's segment (cross-sentence damage).
+//   b) Are NOT from a fine_analysis source at all (e.g. legacy whole-sentence
+//      segments from an old HTML export).
 //
-// 不应报告 情况：
-//   - segment OK应本  fine_analysis edit（use 户想删口吃但keepsentence整体）
+// Cases that should NOT be reported:
+//   - segment matches this sentence's fine_analysis edit (the user wants to delete
+//     stutters/fillers but keep the sentence overall).
 //
 function checkRestoredSentences() {
   const issues = [];
 
-  // 获取restorecolumn表
+  // Get the restored list
   let restoredIndices = [];
   if (corrections && corrections.all_restored_sentence_indices) {
     restoredIndices = corrections.all_restored_sentence_indices;
@@ -145,8 +148,8 @@ function checkRestoredSentences() {
 
   if (restoredIndices.length === 0) return { issues, restoredCount: 0 };
 
-  // 预process：为each个restore收集其 fine_analysis edits  timerange
-  // 这些是use 户有意keep delete（口吃、filler等）
+  // Pre-process: collect each restored sentence's fine_analysis edit time ranges.
+  // These represent intentional deletions (stutters, fillers, etc.).
   const editRangesBySentence = {};
   for (const sIdx of restoredIndices) {
     editRangesBySentence[sIdx] = edits
@@ -154,8 +157,8 @@ function checkRestoredSentences() {
       .map(e => ({ start: e.deleteStart, end: e.deleteEnd, type: e.type }));
   }
 
-  // 判断一个 segment whetherOK应本 某个 fine edit
-  // 使use 宽松match：segment  大部 min timerange（>70%）落在某个 edit range内
+  // Decide whether a segment corresponds to some fine edit.
+  // Loose match: the bulk of the segment's time range (>70%) falls within an edit range.
   function isIntentionalEdit(seg, sentIdx) {
     const sentEdits = editRangesBySentence[sentIdx] || [];
     for (const edit of sentEdits) {
@@ -164,13 +167,13 @@ function checkRestoredSentences() {
       if (overlapEnd > overlapStart) {
         const overlapDuration = overlapEnd - overlapStart;
         const segDuration = seg.end - seg.start;
-        // segment  and  edit 有显著重叠 → 认为是有意  fine edit
+        // Significant overlap between segment and edit → treat as an intentional fine edit
         if (overlapDuration / segDuration > 0.5 || overlapDuration > 0.3) {
           return true;
         }
       }
     }
-    // 也检查其他sentence  edit whether解释这个 segment（跨 fine edit 也是有意 ）
+    // Also check edits from other sentences (cross-sentence fine edits are intentional too)
     for (const edit of edits) {
       if (edit.deleteStart === undefined) continue;
       const overlapStart = Math.max(seg.start, edit.deleteStart);
@@ -190,7 +193,7 @@ function checkRestoredSentences() {
     const sent = sentences[sIdx];
     if (!sent) continue;
 
-    // 收集覆盖本 word range  所有 segment
+    // Collect every segment that overlaps the sentence's word range
     const coveredSegments = new Map(); // seg key → { seg, words: [] }
     for (let wi = sent.wordStart; wi <= sent.wordEnd; wi++) {
       const wt = wordTime(wi);
@@ -205,13 +208,13 @@ function checkRestoredSentences() {
       }
     }
 
-    // OKeach个覆盖 segment，判断whether是有意  fine edit
+    // Decide whether each covering segment is an intentional fine edit
     for (const [key, { seg, words: coveredWords }] of coveredSegments) {
       if (isIntentionalEdit(seg, sIdx)) {
-        continue; // 有意  fine edit，跳
+        continue; // intentional fine edit — skip
       }
 
-      // 非预期 覆盖 → 报告Issue
+      // Unintended coverage → report as an issue
       const wordTexts = coveredWords.map(w => w.text).join('');
       issues.push({
         type: 'restored_word_covered',
@@ -221,7 +224,7 @@ function checkRestoredSentences() {
         coveringSegment: [seg.start, seg.end],
         segmentDuration: parseFloat((seg.end - seg.start).toFixed(2)),
         sentenceText: sent.text.substring(0, 60),
-        note: '此 segment 不OK应任何 fine_analysis edit，可能是跨误伤 or 旧 HTML 导出 bug'
+        note: '此 segment 不對應任何 fine_analysis edit，可能是跨句誤傷或舊 HTML 匯出 bug'
       });
     }
   }
@@ -229,26 +232,28 @@ function checkRestoredSentences() {
   return { issues, restoredCount: restoredIndices.length };
 }
 
-// --- 检查 2: use 户手动delete生效性 ---
+// --- Check 2: manual-deletion effectiveness ---
 //
-// 检查 user_corrections.added_deletions（use 户confirm 整delete）whether都有 segment 覆盖。
-// missed_catches 是 AI 建议 遗漏项，只有when 它带 timestamp 时才检查（通常不带）。
-// Note：这里只检查"whether有任何 segment  and sentencerange重叠"，不要求完full覆盖。
-// 因为整delete可能 min 拆成multi个 fine edit segments。
+// Verify that user_corrections.added_deletions (user-confirmed full-sentence
+// deletions) all have at least one covering segment. missed_catches are AI-suggested
+// misses; only check entries that carry a timestamp (most do not).
+// Note: we only check whether *any* segment overlaps with the sentence range, not
+// whether the entire sentence is covered — because a full-sentence deletion may be
+// split across multiple fine edit segments.
 //
 function checkManualDeletions() {
   const issues = [];
 
   if (!feedback) return { issues, checkedCount: 0 };
 
-  // 2a: 检查 user_corrections.added_deletions (整delete)
+  // 2a: check user_corrections.added_deletions (whole-sentence deletions)
   const addedSentences = [...new Set(feedback.user_corrections?.added_deletions || [])];
   for (const sIdx of addedSentences) {
     const sent = sentences[sIdx];
     if (!sent) continue;
     const range = sentenceTimeRange(sent);
 
-    // 检查整个sentence timerangewhether有 segment 覆盖
+    // Check whether any segment overlaps the sentence's full time range
     const overlap = segmentsOverlapping(range.start, range.end);
     if (overlap.length === 0) {
       issues.push({
@@ -260,8 +265,8 @@ function checkManualDeletions() {
     }
   }
 
-  // 2b: 检查 missed_catches (AI 建议 遗漏)
-  // 只检查带精确time戳 条目；notime戳 跳
+  // 2b: check missed_catches (AI-suggested misses)
+  // Only check entries with precise timestamps; skip those without.
   const missedCatches = feedback.missed_catches || [];
   let missedWithTs = 0;
   for (const mc of missedCatches) {
@@ -282,12 +287,12 @@ function checkManualDeletions() {
   return { issues, checkedCount: addedSentences.length + missedWithTs };
 }
 
-// --- 检查 3: 切点silencedetect ---
+// --- Check 3: cut-point silence detection ---
 function checkCutPointSilences() {
   const issues = [];
-  const SILENCE_THRESHOLD = 0.3; // s，超此值标记为可疑pause
+  const SILENCE_THRESHOLD = 0.3; // seconds — anything beyond this is flagged as a suspicious pause
 
-  // 按起始timesort所有 segment
+  // Sort all segments by start time
   const sorted = [...segments].sort((a, b) => a.start - b.start);
 
   for (let i = 0; i < sorted.length - 1; i++) {
@@ -295,10 +300,10 @@ function checkCutPointSilences() {
     const nextSegStart = sorted[i + 1].start;
     const gapDuration = nextSegStart - segEnd;
 
-    // 只关注短间距keep segment (gap < 3s  才检查，太长 是正常content)
+    // Only consider short kept gaps (<3s); longer gaps are normal content.
     if (gapDuration <= 0 || gapDuration > 3.0) continue;
 
-    // 检查这segmentkeepinterval内whether有实际语音content
+    // Check whether the kept interval contains any actual speech content
     const gapWords = words.filter(w => {
       const ws = w.start || w.s || 0;
       const we = w.end || w.e || 0;
@@ -311,7 +316,7 @@ function checkCutPointSilences() {
     });
 
     if (!hasContent && gapDuration > SILENCE_THRESHOLD) {
-      // 找到前后 实际语音content
+      // Look for actual speech content immediately before/after the gap
       const beforeWords = words.filter(w => {
         const we = w.end || w.e || 0;
         return we <= segEnd && we > segEnd - 2;
@@ -330,7 +335,7 @@ function checkCutPointSilences() {
         duration: parseFloat(gapDuration.toFixed(3)),
         beforeText,
         afterText,
-        suggestion: `可扩展deletesegment [${segEnd.toFixed(2)}-${nextSegStart.toFixed(2)}] 消除pause`
+        suggestion: `可擴展刪除片段 [${segEnd.toFixed(2)}-${nextSegStart.toFixed(2)}] 消除停頓`
       });
     }
   }
@@ -338,10 +343,10 @@ function checkCutPointSilences() {
   return { issues };
 }
 
-// --- 检查 4: 大segmentdelete衔接 ---
+// --- Check 4: large-deletion stitching ---
 function checkLargeDeletions() {
   const issues = [];
-  const LARGE_THRESHOLD = 5.0; // s
+  const LARGE_THRESHOLD = 5.0; // seconds
 
   const sorted = [...segments].sort((a, b) => a.start - b.start);
 
@@ -349,7 +354,7 @@ function checkLargeDeletions() {
     const duration = seg.end - seg.start;
     if (duration < LARGE_THRESHOLD) continue;
 
-    // 找delete前后 文本
+    // Find the text immediately before and after the deletion
     const beforeWords = words.filter(w => {
       const we = w.end || w.e || 0;
       return we <= seg.start && we > seg.start - 5;
@@ -362,8 +367,8 @@ function checkLargeDeletions() {
     const beforeText = beforeWords.slice(-8).map(w => w.text || w.word || w.w || '').join('');
     const afterText = afterWords.slice(0, 8).map(w => w.text || w.word || w.w || '').join('');
 
-    // 检查speakertoggle
-    const beforeSpeaker = beforeWords.length > 0 ? null : null; // 简化：暂不dospeaker检查
+    // Speaker switch check (skipped for now — placeholder)
+    const beforeSpeaker = beforeWords.length > 0 ? null : null;
 
     issues.push({
       type: 'large_deletion',
@@ -379,9 +384,9 @@ function checkLargeDeletions() {
   return { issues };
 }
 
-// --- 主function ---
+// --- Main ---
 function main() {
-  console.log('🔍 edit质检Start...\n');
+  console.log('🔍 剪輯品質檢測開始...\n');
 
   const report = {
     timestamp: new Date().toISOString(),
@@ -390,72 +395,72 @@ function main() {
     checks: {}
   };
 
-  // 检查 1
+  // Check 1
   const restored = checkRestoredSentences();
   report.checks.restoredSentences = restored;
-  console.log(`✅ 检查1: restore完整性 — ${restored.restoredCount} 个restore，${restored.issues.length} 个Issue`);
+  console.log(`✅ 檢查 1：還原完整性 — ${restored.restoredCount} 個還原，${restored.issues.length} 個問題`);
   if (restored.issues.length > 0) {
     restored.issues.forEach(i => {
-      console.log(`   ⚠️  s${i.sentenceIdx}   "${i.wordTexts}" (${i.wordCount}word, ${i.segmentDuration}s) 被 segment [${i.coveringSegment[0].toFixed(2)}-${i.coveringSegment[1].toFixed(2)}] 覆盖`);
+      console.log(`   ⚠️  s${i.sentenceIdx} 中 "${i.wordTexts}" (${i.wordCount} 字, ${i.segmentDuration}s) 被 segment [${i.coveringSegment[0].toFixed(2)}-${i.coveringSegment[1].toFixed(2)}] 覆蓋`);
     });
   }
 
-  // 检查 2
+  // Check 2
   const manual = checkManualDeletions();
   report.checks.manualDeletions = manual;
-  console.log(`\n✅ 检查2: use 户手动delete — ${manual.checkedCount} 项检查，${manual.issues.length} 个Issue`);
+  console.log(`\n✅ 檢查 2：使用者手動刪除 — ${manual.checkedCount} 項檢查，${manual.issues.length} 個問題`);
   if (manual.issues.length > 0) {
     manual.issues.slice(0, 10).forEach(i => {
       if (i.type === 'manual_sentence_not_deleted') {
-        console.log(`   ⚠️  s${i.sentenceIdx} 整delete未生效 [${i.timeRange[0].toFixed(2)}-${i.timeRange[1].toFixed(2)}]`);
+        console.log(`   ⚠️  s${i.sentenceIdx} 整句刪除未生效 [${i.timeRange[0].toFixed(2)}-${i.timeRange[1].toFixed(2)}]`);
       } else {
-        console.log(`   ⚠️  s${i.sentenceIdx} "${i.text}" (${i.category}) 未被覆盖`);
+        console.log(`   ⚠️  s${i.sentenceIdx} "${i.text}" (${i.category}) 未被覆蓋`);
       }
     });
-    if (manual.issues.length > 10) console.log(`   ... 还有 ${manual.issues.length - 10} 个`);
+    if (manual.issues.length > 10) console.log(`   ... 還有 ${manual.issues.length - 10} 個`);
   }
 
-  // 检查 3
+  // Check 3
   const silences = checkCutPointSilences();
   report.checks.cutPointSilences = silences;
-  console.log(`\n✅ 检查3: 切点silence — ${silences.issues.length} 个可疑pause`);
+  console.log(`\n✅ 檢查 3：切點靜音 — ${silences.issues.length} 個可疑停頓`);
   if (silences.issues.length > 0) {
     silences.issues.slice(0, 10).forEach(i => {
-      console.log(`   ⏸️  [${i.gapStart.toFixed(2)}-${i.gapEnd.toFixed(2)}] ${i.duration}s silence — "${i.beforeText}" → "${i.afterText}"`);
+      console.log(`   ⏸️  [${i.gapStart.toFixed(2)}-${i.gapEnd.toFixed(2)}] ${i.duration}s 靜音 — "${i.beforeText}" → "${i.afterText}"`);
     });
-    if (silences.issues.length > 10) console.log(`   ... 还有 ${silences.issues.length - 10} 个`);
+    if (silences.issues.length > 10) console.log(`   ... 還有 ${silences.issues.length - 10} 個`);
   }
 
-  // 检查 4
+  // Check 4
   const large = checkLargeDeletions();
   report.checks.largeDeletions = large;
-  console.log(`\n✅ 检查4: 大segmentdelete — ${large.issues.length} segment (>5s) needs 人工confirm衔接`);
+  console.log(`\n✅ 檢查 4：大段刪除 — ${large.issues.length} 段 (>5s) 需人工確認銜接`);
   if (large.issues.length > 0) {
     large.issues.forEach(i => {
       console.log(`   ✂️  [${i.start.toFixed(1)}-${i.end.toFixed(1)}s] ${i.duration}s — "...${i.beforeText}" → "${i.afterText}..."`);
     });
   }
 
-  // 汇总
+  // Summary
   const totalIssues = restored.issues.length + manual.issues.length + silences.issues.length;
   console.log(`\n${'─'.repeat(50)}`);
   if (totalIssues === 0) {
-    console.log('🎉 质检通！未发现自动可detect Issue。');
-    console.log(`   (${large.issues.length} segment大segmentdelete建议人工confirm衔接)`);
+    console.log('🎉 品質檢測通過！未發現可自動偵測的問題。');
+    console.log(`   (${large.issues.length} 段大段刪除建議人工確認銜接)`);
   } else {
-    console.log(`⚠️  发现 ${totalIssues} 个IssueneedsFix：`);
-    if (restored.issues.length) console.log(`   - ${restored.issues.length} 个restore被覆盖`);
-    if (manual.issues.length) console.log(`   - ${manual.issues.length} 个手动delete未生效`);
-    if (silences.issues.length) console.log(`   - ${silences.issues.length} 个切点silencepause`);
-    console.log(`   + ${large.issues.length} segment大segmentdelete建议人工confirm`);
+    console.log(`⚠️  發現 ${totalIssues} 個問題需修正：`);
+    if (restored.issues.length) console.log(`   - ${restored.issues.length} 個還原被覆蓋`);
+    if (manual.issues.length) console.log(`   - ${manual.issues.length} 個手動刪除未生效`);
+    if (silences.issues.length) console.log(`   - ${silences.issues.length} 個切點靜音停頓`);
+    console.log(`   + ${large.issues.length} 段大段刪除建議人工確認`);
   }
 
-  // save报告
+  // Save report
   const reportPath = path.join(analysisDir, 'audit_report.json');
   fs.writeFileSync(reportPath, JSON.stringify(report, null, 2));
-  console.log(`\n📄 完整报告: ${reportPath}`);
+  console.log(`\n📄 完整報告：${reportPath}`);
 
-  // exit码：有Issue返回 1
+  // Exit code: 1 when there are issues
   process.exit(totalIssues > 0 ? 1 : 0);
 }
 

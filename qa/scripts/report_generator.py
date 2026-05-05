@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """
-Layer 3: 综合质检报告generate
+Layer 3: combined QA report generator.
 
-merge Layer 1（信号analyze） and  Layer 2（AI 听感评估） result，
-generate结构化 JSON 报告 + 人类可读 Markdown 摘要。
+Merges Layer 1 (signal analysis) and Layer 2 (AI listening evaluation) results
+into a structured JSON report plus a human-readable Markdown summary.
 
-Usage：
+Usage:
     python3 report_generator.py --signal qa_signal_report.json --output qa_report.json --summary qa_summary.md
     python3 report_generator.py --signal qa_signal_report.json --ai qa_ai_report.json --output qa_report.json --summary qa_summary.md
 """
@@ -20,7 +20,7 @@ sys.stderr.reconfigure(line_buffering=True)
 
 
 def format_time(seconds):
-    """format化time为 MM:SS  or  H:MM:SS"""
+    """Format seconds as MM:SS or H:MM:SS."""
     m, s = divmod(int(seconds), 60)
     if m >= 60:
         h, m = divmod(m, 60)
@@ -30,17 +30,18 @@ def format_time(seconds):
 
 def recalculate_signal_score(signal_report, podcast_mode=True):
     """
-    重新calculate信号评 min （播客模式使use 更宽松 threshold）
+    Re-score the signal report (podcast mode applies looser thresholds).
 
-    播客中自然语气变化产生 能量比会触发低threshold——
-    AI 复查confirm energy_jump 在播客中few乎full是fake阳性（自然换人/语气变化），
-    即使 105x  能量比也是正常 speakertoggle。
+    Natural intonation shifts in podcasts can trip the low-threshold energy
+    checks. AI re-review confirms that energy_jump in podcasts is almost
+    always a false positive (natural speaker swap or intonation change) —
+    even a 105x energy ratio is normal speaker switching.
 
-    播客模式下：
-    - energy_jump 完full忽略（AI 已证实full部fake阳性）
-    - 只keep spectral_jump（频谱跳变，可能是背景噪声变化）
-    - 只keep unnatural_silence（不自然silence，可能是剪切痕迹）
-    - ZCR  and 呼吸音截断误报太multi，忽略
+    In podcast mode:
+    - energy_jump is fully ignored (AI has confirmed it is all false positives)
+    - keep spectral_jump (could indicate background-noise change)
+    - keep unnatural_silence (could indicate cut artifacts)
+    - ZCR and breath-truncation produce too many false positives — ignore
     """
     issues = signal_report.get('issues', [])
 
@@ -51,9 +52,9 @@ def recalculate_signal_score(signal_report, podcast_mode=True):
                 significant.append(issue)
             elif issue['type'] == 'unnatural_silence':
                 significant.append(issue)
-            # energy_jump: 播客中full是fake阳性（自然语气/speakertoggle），忽略
-            # zcr_discontinuity: 播客中误报太multi，忽略
-            # breath_truncation: 播客中误报太multi，忽略
+            # energy_jump: all false positives in podcasts — ignore
+            # zcr_discontinuity: too noisy in podcasts — ignore
+            # breath_truncation: too noisy in podcasts — ignore
     else:
         significant = issues
 
@@ -68,18 +69,18 @@ def recalculate_signal_score(signal_report, podcast_mode=True):
 
 
 def merge_scores(signal_score, ai_score=None):
-    """merge两层评 min """
+    """Merge the two layer scores."""
     if ai_score is not None:
-        # AI 听感权重更高（人耳判断更可靠）
+        # AI listening is weighted higher (human-ear judgment is more reliable)
         return round(0.4 * signal_score + 0.6 * ai_score, 1)
     return signal_score
 
 
 def collect_review_items(signal_issues, ai_evals=None):
-    """收集needs人工复听 segment"""
+    """Collect segments that require manual listening."""
     items = []
 
-    # 从信号analyze中收集（已滤后 显著Issue）
+    # From signal analysis (already-filtered significant issues)
     for issue in signal_issues:
         items.append({
             "time": issue['timestamp'],
@@ -92,7 +93,7 @@ def collect_review_items(signal_issues, ai_evals=None):
             "listen_range": issue.get('listen_range', []),
         })
 
-    # 从 AI 评估中收集
+    # From AI evaluation
     if ai_evals:
         for ev in ai_evals:
             if ev['strategy'] == 'global_sampling':
@@ -104,7 +105,7 @@ def collect_review_items(signal_issues, ai_evals=None):
                         "type": "ai_detected",
                         "severity": "medium",
                         "detail": issue.get('description', ''),
-                        "suggestion": "人工复听confirm",
+                        "suggestion": "人工複聽確認",
                         "listen_range": ev.get('clip_range', []),
                     })
             elif ev['strategy'] == 'suspicious_review' and ev.get('is_real_issue'):
@@ -115,12 +116,12 @@ def collect_review_items(signal_issues, ai_evals=None):
                     "source": "ai_confirmed",
                     "type": orig.get('type', 'unknown'),
                     "severity": "high",
-                    "detail": f"AI confirm: {ev.get('explanation', '')}",
+                    "detail": f"AI 確認：{ev.get('explanation', '')}",
                     "suggestion": ev.get('explanation', ''),
                     "listen_range": ev.get('clip_range', []),
                 })
 
-    # 按timesort，去重（5s 内同源 merge）
+    # Sort by time and dedupe (merge same-source items within 5s)
     items.sort(key=lambda x: x['time'])
     deduped = []
     for item in items:
@@ -131,60 +132,60 @@ def collect_review_items(signal_issues, ai_evals=None):
 
 
 def generate_markdown(report):
-    """generate人类可读  Markdown 摘要"""
+    """Generate a human-readable Markdown summary."""
     lines = []
-    lines.append("# 播客edit质检报告\n")
-    lines.append(f"**audio**: {report['audio_file']}")
-    lines.append(f"**duration**: {format_time(report['duration_seconds'])}")
+    lines.append("# 播客剪輯品質檢測報告\n")
+    lines.append(f"**音訊**：{report['audio_file']}")
+    lines.append(f"**長度**：{format_time(report['duration_seconds'])}")
 
     cut_points = report.get('detected_cut_points', 'N/A')
-    lines.append(f"**detect剪切点**: {cut_points} 个")
+    lines.append(f"**偵測剪切點**：{cut_points} 個")
 
     score = report['overall_score']
     score_emoji = "🟢" if score >= 8 else "🟡" if score >= 6 else "🔴"
-    lines.append(f"**总体评 min **: {score_emoji} {score} / 10\n")
+    lines.append(f"**總體評分**：{score_emoji} {score} / 10\n")
 
-    # 评 min 来源
+    # Score breakdown
     if report.get('ai_score') is not None:
-        lines.append(f"> 信号评 min : {report['signal_score']}/10 | AI 评 min : {report['ai_score']}/10 | 综合: {score}/10\n")
+        lines.append(f"> 信號評分：{report['signal_score']}/10 | AI 評分：{report['ai_score']}/10 | 綜合：{score}/10\n")
     else:
-        lines.append(f"> 信号评 min : {report['signal_score']}/10（未使use  AI 评估）\n")
+        lines.append(f"> 信號評分：{report['signal_score']}/10（未使用 AI 評估）\n")
 
-    # needs复听 segment
+    # Items needing manual review
     review_items = report.get('review_items', [])
     if review_items:
-        lines.append(f"## needs人工复听 segment（{len(review_items)} 个）\n")
-        lines.append("| # | time | 来源 | Issuetype | 严重度 | 说明 |")
+        lines.append(f"## 需人工複聽片段（{len(review_items)} 個）\n")
+        lines.append("| # | 時間 | 來源 | 問題類型 | 嚴重度 | 說明 |")
         lines.append("|---|------|------|----------|--------|------|")
         for i, item in enumerate(review_items, 1):
-            source_label = {"signal": "信号", "ai": "AI", "ai_confirmed": "AIconfirm"}.get(item['source'], item['source'])
+            source_label = {"signal": "信號", "ai": "AI", "ai_confirmed": "AI 確認"}.get(item['source'], item['source'])
             sev_label = {"high": "🔴 HIGH", "medium": "🟡 MED", "low": "🟢 LOW"}.get(item['severity'], item['severity'])
             detail = item['detail'][:60] + "..." if len(item['detail']) > 60 else item['detail']
             lines.append(f"| {i} | {item['time_str']} | {source_label} | {item['type']} | {sev_label} | {detail} |")
 
-        # 估算复听time
-        total_listen = len(review_items) * 5  # each个点约 5 s
-        lines.append(f"\n> 只needs 复听以上 {len(review_items)} 个segment（约 {total_listen} s），无needs 听完整集。\n")
+        # Estimate review time
+        total_listen = len(review_items) * 5  # roughly 5s per point
+        lines.append(f"\n> 只需複聽以上 {len(review_items)} 個片段（約 {total_listen} 秒），無需聽完整集。\n")
     else:
-        lines.append("## ✅ 无needs 人工复听\n")
-        lines.append("所有detect点均通，audio质量良good。\n")
+        lines.append("## ✅ 無需人工複聽\n")
+        lines.append("所有偵測點均通過，音訊品質良好。\n")
 
-    # AI 误报analyze（e.g.有）
+    # AI false-positive analysis (if any)
     if report.get('ai_summary'):
         ai = report['ai_summary']
         if ai.get('false_positives', 0) > 0:
             total_checked = ai.get('suspicious_clips', 0)
             fp = ai['false_positives']
-            lines.append(f"## AI 复查result\n")
-            lines.append(f"- 复查 Layer 1   {total_checked} 个 HIGH Issue")
-            lines.append(f"- ✅ 误报: {fp} 个（{fp/max(total_checked,1)*100:.0f}%）")
-            lines.append(f"- ⚠️ confirm: {ai.get('confirmed_issues', 0)} 个\n")
+            lines.append(f"## AI 複查結果\n")
+            lines.append(f"- 複查 Layer 1 的 {total_checked} 個 HIGH 問題")
+            lines.append(f"- ✅ 誤報：{fp} 個（{fp/max(total_checked,1)*100:.0f}%）")
+            lines.append(f"- ⚠️ 確認：{ai.get('confirmed_issues', 0)} 個\n")
 
-    # statistics
-    lines.append("## statistics\n")
+    # Stats
+    lines.append("## 統計\n")
     stats = report.get('signal_summary', {})
-    lines.append(f"- sourcedetect issues: {stats.get('original_total', 'N/A')} 个")
-    lines.append(f"- 播客模式滤后: {stats.get('filtered_total', 'N/A')} 个")
+    lines.append(f"- 原始偵測問題：{stats.get('original_total', 'N/A')} 個")
+    lines.append(f"- 播客模式過濾後：{stats.get('filtered_total', 'N/A')} 個")
     if review_items:
         high = sum(1 for r in review_items if r['severity'] == 'high')
         med = sum(1 for r in review_items if r['severity'] == 'medium')
@@ -202,22 +203,22 @@ def main():
     parser.add_argument("--summary", help="Output Markdown summary path")
     args = parser.parse_args()
 
-    # read Layer 1
+    # Load Layer 1
     if not Path(args.signal).exists():
-        print(f"❌ not found信号报告: {args.signal}")
+        print(f"❌ 找不到信號報告：{args.signal}")
         sys.exit(1)
 
     with open(args.signal) as f:
         signal_report = json.load(f)
 
-    print(f"📋 Layer 1: {signal_report.get('summary', {}).get('total_issues', 0)} source issues")
+    print(f"📋 Layer 1：{signal_report.get('summary', {}).get('total_issues', 0)} 個原始問題")
 
-    # 播客模式重新calculate
+    # Recompute under podcast mode
     signal_score, significant_issues = recalculate_signal_score(signal_report, podcast_mode=True)
-    print(f"   播客模式滤后: {len(significant_issues)} 个显著Issue")
-    print(f"   信号评 min : {signal_score}/10")
+    print(f"   播客模式過濾後：{len(significant_issues)} 個顯著問題")
+    print(f"   信號評分：{signal_score}/10")
 
-    # read Layer 2（e.g.有）
+    # Load Layer 2 if provided
     ai_report = None
     ai_score = None
     ai_evals = None
@@ -226,17 +227,17 @@ def main():
             ai_report = json.load(f)
         ai_score = ai_report.get('ai_score')
         ai_evals = ai_report.get('evaluations', [])
-        print(f"📋 Layer 2: AI 评 min  {ai_score}/10")
+        print(f"📋 Layer 2：AI 評分 {ai_score}/10")
 
-    # merge评 min 
+    # Merge scores
     overall = merge_scores(signal_score, ai_score)
-    print(f"\n📊 综合评 min : {overall}/10")
+    print(f"\n📊 綜合評分：{overall}/10")
 
-    # 收集needs复听 segment
+    # Collect review items
     review_items = collect_review_items(significant_issues, ai_evals)
-    print(f"   needs复听: {len(review_items)} 个segment")
+    print(f"   需複聽：{len(review_items)} 個片段")
 
-    # 构建综合报告
+    # Build combined report
     report = {
         "audio_file": signal_report.get('audio_file', ''),
         "duration_seconds": signal_report.get('duration_seconds', 0),
@@ -252,17 +253,17 @@ def main():
         "ai_summary": ai_report.get('summary') if ai_report else None,
     }
 
-    # save JSON
+    # Save JSON
     with open(args.output, 'w', encoding='utf-8') as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
-    print(f"\n✅ 报告saved: {args.output}")
+    print(f"\n✅ 報告已儲存：{args.output}")
 
-    # generate Markdown
+    # Generate Markdown
     if args.summary:
         md = generate_markdown(report)
         with open(args.summary, 'w', encoding='utf-8') as f:
             f.write(md)
-        print(f"✅ 摘要saved: {args.summary}")
+        print(f"✅ 摘要已儲存：{args.summary}")
         print(f"\n{'='*50}")
         print(md)
 

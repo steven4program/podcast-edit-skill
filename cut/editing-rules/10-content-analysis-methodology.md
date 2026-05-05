@@ -31,7 +31,7 @@
 1. Inspect the 2–3 sentences before and after each delete block.
 2. Make sure the cut isn't mid-conversation (don't split a question from its answer).
 3. Make sure content before and after the cut joins naturally.
-4. **Isolated-residual check**: after deleting a big block, the 1–2 sentences kept just before / after may stand alone and lose context (e.g. "另外一个节目。" hanging out after a long delete). Mark such orphaned sentences for deletion too. How to spot them: after each big-block delete, re-read the 3 sentences kept on either side; if any is now ambiguous in reference or logically broken, fold it into the delete range.
+4. **Isolated-residual check**: after deleting a big block, the 1–2 sentences kept just before / after may stand alone and lose context (e.g. "另外一個節目。" hanging out after a long delete). Mark such orphaned sentences for deletion too. How to spot them: after each big-block delete, re-read the 3 sentences kept on either side; if any is now ambiguous in reference or logically broken, fold it into the delete range.
 
 ---
 
@@ -177,7 +177,7 @@ Go straight to quality-optimization analysis (next section). No additional durat
 Expand the delete range progressively (mark `"action": "delete"`):
 
 1. **Repetitive points** — same point made by different speakers from different angles; keep the best one.
-2. **Over-elaborate transitions** — "let's move to the next topic", "嗯嗯嗯对对对" — informationless filler.
+2. **Over-elaborate transitions** — "let's move to the next topic", "嗯嗯嗯對對對" — informationless filler.
 3. **Low-density paragraphs** — long buildup but only one or two sentences carry the core info.
 4. **Listener-weak details** — overly personal details (unless that's the show's selling point).
 

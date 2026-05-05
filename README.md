@@ -10,12 +10,12 @@ Pain points of traditional podcast editors:
 2. **Manual editing is slow**: a 2-hour podcast needs hours of listening to find the issues.
 3. **Crude verbal-tic handling**: stutters, self-corrections, consecutive fillers — handled one at a time by hand.
 
-This agent uses Claude's semantic understanding for content analysis, Aliyun FunASR for transcription, and an interactive review page for human confirmation. AI-assisted end-to-end.
+This agent uses Claude's semantic understanding for content analysis, local Whisper for transcription, and an interactive review page for human confirmation. AI-assisted end-to-end.
 
 ## Result
 
-- 2–3 hour podcast → 3 minutes to transcribe + AI analysis + interactive review → final MP3
-- 98.8 % speaker-recognition accuracy (Aliyun FunASR)
+- Local transcription + AI analysis + interactive review → final MP3
+- Optional OpenAI path remains available when API diarization is preferred
 - Paragraph-level content trimming + word-level fine cut (stutters, self-corrections, fillers)
 - In-browser real-time playback with every edit applied instantly
 
@@ -42,16 +42,16 @@ Verify: restart Claude Code and type `/` — `podcast-edit-install`, `podcast-ed
 
 ```bash
 brew install node ffmpeg
+pip install -r cut/scripts/requirements.txt
 pip install librosa soundfile     # for the qa skill
 ```
 
-### 3. Configure the Aliyun API key
+### 3. Configure optional API keys
 
 ```bash
 cd /path/to/podcast-edit-skill
 cp .env.example .env
-# Edit .env, fill in your Aliyun DashScope API key
-# Get one at: https://dashscope.console.aliyun.com/
+# Edit .env only if you use optional services such as Gemini QA or OpenAI fallback
 ```
 
 ### 4. Use it
@@ -74,8 +74,8 @@ Detailed install steps: `/podcast-edit-install`.
     │  └─ existing user: one-line confirmation
     │
     │  Stage 2: cut analysis
-    │  ├─ transcribe (Aliyun FunASR, ~3 min)
-    │  ├─ speaker recognition + sentence split
+    │  ├─ transcribe (local Whisper by default)
+    │  ├─ speaker labels + sentence split
     │  ├─ AI rough-cut (paragraph-level)
     │  └─ AI fine-cut (word-level: stutter, self-correction, filler)
     │
@@ -136,9 +136,11 @@ podcast-edit-skill/
 ├── cut/                           # core skill (stages 1-5, 8)
 │   ├── SKILL.md                   # full pipeline doc (8 stages)
 │   ├── scripts/
-│   │   ├── aliyun_funasr_transcribe.sh
+│   │   ├── aliyun_funasr_transcribe.sh  # TODO: Replace with OpenAI Whisper
+│   │   ├── transcribe_whisper_local.py
+│   │   ├── transcribe_whisper_multitrack.py
 │   │   ├── identify_speakers.js
-│   │   ├── generate_subtitles_from_aliyun.js
+│   │   ├── generate_subtitles_from_aliyun.js # TODO: Replace with OpenAI Whisper
 │   │   ├── generate_sentences.js
 │   │   ├── generate_review_enhanced.js
 │   │   ├── generate_review_final.js
@@ -194,7 +196,7 @@ Feedback is captured at three points — Stage 4 (user review), Stage 6 (AI QA),
 | Node.js | run scripts | `brew install node` |
 | FFmpeg | audio processing | `brew install ffmpeg` |
 | Python 3 | audio cutting | macOS built-in |
-| Aliyun DashScope API | speech recognition + diarization | [get a key](https://dashscope.console.aliyun.com/) |
+| faster-whisper | local speech recognition | `pip install -r cut/scripts/requirements.txt` |
 
 ## License
 

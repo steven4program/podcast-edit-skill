@@ -3,5 +3,7 @@
 .DS_Store
 output/
 node_modules/
+.venv/
 cut/user-prefs/
 cut/todo.md
+source/

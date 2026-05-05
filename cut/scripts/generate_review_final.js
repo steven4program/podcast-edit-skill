@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
- * generate_review_final.js — stage 8: use 户终审页面generate
+ * generate_review_final.js — stage 8: generate the user's final-review page.
  *
- * 将质检三stage（data layer/信号层/语义层）报告merge为一个可交互  HTML 终审页面。
- * use 户可以：播放audio、点击time戳跳转、逐条confirm/标记Issue、导出feedback。
+ * Merges the three QA reports (data / signal / semantic) into a single interactive
+ * HTML final-review page. The user can: play audio, click timestamps to jump,
+ * confirm/flag each issue, and export feedback.
  *
  * Usage:
  *   node generate_review_final.js \
@@ -15,16 +16,16 @@
  *     --words <subtitles_words.json> \
  *     --output <review_final.html>
  *
- * input（均optional，缺失then跳OK应层）:
- *   - audit_report.json:       Phase A data layer质检报告
- *   - qa_signal_report.json:   Phase B 信号层质检报告
- *   - qa_semantic_report.json: Phase C 语义层质检报告
- *   - qa_report.json:          综合报告（含评 min  and  review_items）
- *   - subtitles_words.json:    sourcetranscribeword-leveltime戳（use 于上下文展示）
- *   - final_audio.mp3:         成品audio path
+ * Inputs (all optional — missing inputs skip the matching layer):
+ *   - audit_report.json:       Phase A data-layer QA report
+ *   - qa_signal_report.json:   Phase B signal-layer QA report
+ *   - qa_semantic_report.json: Phase C semantic-layer QA report
+ *   - qa_report.json:          combined report (scores + review_items)
+ *   - subtitles_words.json:    source word-level timestamps (used for context display)
+ *   - final_audio.mp3:         final-cut audio path
  *
- * output:
- *   review_final.html — 自includesinglefile终审页面
+ * Output:
+ *   review_final.html — self-contained single-file final-review page
  */
 
 const fs = require('fs');
@@ -42,14 +43,14 @@ function parseArgs() {
   return opts;
 }
 
-// --- 辅助function ---
+// --- Helpers ---
 
 function readJsonSafe(filePath) {
   if (!filePath || !fs.existsSync(filePath)) return null;
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf8'));
   } catch (e) {
-    console.warn(`Warning: 无法read ${filePath}: ${e.message}`);
+    console.warn(`Warning: 無法讀取 ${filePath}：${e.message}`);
     return null;
   }
 }
@@ -69,7 +70,7 @@ function escapeHtml(text) {
     .replace(/"/g, '&quot;');
 }
 
-// --- extract上下文文本 ---
+// --- Extract context text ---
 
 function getContextText(words, timeSec, windowSec = 3) {
   if (!words || !words.length) return { before: '', after: '' };
@@ -79,7 +80,7 @@ function getContextText(words, timeSec, windowSec = 3) {
 
   const actualWords = wordList.filter(w => !w.isGap && !w.isSpeakerLabel);
 
-  // 找到最近 word
+  // Find the nearest word
   let closest = 0;
   let minDist = Infinity;
   for (let i = 0; i < actualWords.length; i++) {
@@ -90,7 +91,7 @@ function getContextText(words, timeSec, windowSec = 3) {
     }
   }
 
-  // 前后各取 windowSec s word
+  // Take windowSec seconds of words on each side
   const beforeWords = [];
   const afterWords = [];
   for (let i = closest - 1; i >= 0; i--) {
@@ -108,12 +109,12 @@ function getContextText(words, timeSec, windowSec = 3) {
   };
 }
 
-// --- merge所有 QA Issue ---
+// --- Merge all QA issues ---
 
 function collectIssues(auditReport, signalReport, semanticReport, qaReport, words) {
   const issues = [];
 
-  // 1. 综合报告中  review_items（优先使use ，已去重+sort）
+  // 1. review_items from the combined report (preferred — already deduped + sorted)
   if (qaReport && qaReport.review_items) {
     for (const item of qaReport.review_items) {
       const ctx = getContextText(words, item.time);
@@ -123,7 +124,7 @@ function collectIssues(auditReport, signalReport, semanticReport, qaReport, word
         timeStr: item.time_str || formatTime(item.time),
         source: item.source || 'signal',
         layer: item.source === 'ai' || item.source === 'ai_confirmed' ? 'signal_ai' : 'signal',
-        layerLabel: item.source === 'ai' || item.source === 'ai_confirmed' ? 'AI 听感' : '信号层',
+        layerLabel: item.source === 'ai' || item.source === 'ai_confirmed' ? 'AI 聽感' : '訊號層',
         type: item.type,
         severity: item.severity || 'medium',
         detail: item.detail,
@@ -135,7 +136,7 @@ function collectIssues(auditReport, signalReport, semanticReport, qaReport, word
     }
   }
 
-  // 2. data layer审计报告（e.g.果no综合报告， or 补充综合报告缺失 ）
+  // 2. Data-layer audit report (when there's no combined report, or to fill gaps in it)
   if (auditReport && auditReport.checks) {
     const existingTimes = new Set(issues.map(i => Math.round(i.time * 10)));
 
@@ -149,7 +150,7 @@ function collectIssues(auditReport, signalReport, semanticReport, qaReport, word
         timeStr: formatTime(time),
         source: 'audit',
         layer: 'data',
-        layerLabel: 'data layer',
+        layerLabel: '資料層',
         type: issue.type,
         severity,
         detail: issue.note || issue.sentenceText || `${issue.beforeText || ''} → ${issue.afterText || ''}`,
@@ -160,25 +161,25 @@ function collectIssues(auditReport, signalReport, semanticReport, qaReport, word
       });
     };
 
-    // restore被误剪
+    // Restored sentences mistakenly cut
     for (const issue of (auditReport.checks.restoredSentences?.issues || [])) {
-      addAuditIssue(issue, 'data layer', 'high');
+      addAuditIssue(issue, '資料層', 'high');
     }
-    // 手动delete未生效
+    // Manual deletions that didn't take effect
     for (const issue of (auditReport.checks.manualDeletions?.issues || [])) {
-      addAuditIssue(issue, 'data layer', 'high');
+      addAuditIssue(issue, '資料層', 'high');
     }
-    // 切点silence
+    // Cut-point silences
     for (const issue of (auditReport.checks.cutPointSilences?.issues || [])) {
-      addAuditIssue(issue, 'data layer', 'medium');
+      addAuditIssue(issue, '資料層', 'medium');
     }
-    // 大segmentdelete
+    // Large deletions
     for (const issue of (auditReport.checks.largeDeletions?.issues || [])) {
-      addAuditIssue(issue, 'data layer', 'low');
+      addAuditIssue(issue, '資料層', 'low');
     }
   }
 
-  // 3. 语义层报告
+  // 3. Semantic-layer report
   if (semanticReport && semanticReport.checks) {
     const checks = semanticReport.checks;
 
@@ -190,10 +191,10 @@ function collectIssues(auditReport, signalReport, semanticReport, qaReport, word
         timeStr: formatTime(filler.time),
         source: 'semantic',
         layer: 'semantic',
-        layerLabel: '语义层',
+        layerLabel: '語義層',
         type: 'residual_filler',
         severity: 'medium',
-        detail: `残留filler: "${filler.text}"`,
+        detail: `殘留贅詞："${filler.text}"`,
         suggestion: 'check if should be deleted',
         listenRange: [Math.max(0, filler.time - 1), filler.time + 1],
         contextBefore: ctx.before,
@@ -209,10 +210,10 @@ function collectIssues(auditReport, signalReport, semanticReport, qaReport, word
         timeStr: formatTime(stutter.time),
         source: 'semantic',
         layer: 'semantic',
-        layerLabel: '语义层',
+        layerLabel: '語義層',
         type: 'residual_stutter',
         severity: 'medium',
-        detail: `残留卡顿: ${stutter.context}`,
+        detail: `殘留卡頓：${stutter.context}`,
         suggestion: 'check if should be deleted',
         listenRange: [Math.max(0, stutter.time - 1), stutter.time + 2],
         contextBefore: ctx.before,
@@ -229,10 +230,10 @@ function collectIssues(auditReport, signalReport, semanticReport, qaReport, word
         timeStr: formatTime(time),
         source: 'semantic',
         layer: 'semantic',
-        layerLabel: '语义层',
+        layerLabel: '語義層',
         type: 'missing_content',
         severity: 'high',
-        detail: `content缺失: "${missing.expected}"`,
+        detail: `內容缺失："${missing.expected}"`,
         suggestion: 'check if mistakenly deleted',
         listenRange: missing.time_range || [Math.max(0, time - 3), time + 3],
         contextBefore: ctx.before,
@@ -241,7 +242,7 @@ function collectIssues(auditReport, signalReport, semanticReport, qaReport, word
     }
   }
 
-  // 按严重度sort（HIGH > MEDIUM > LOW），同level按time
+  // Sort by severity (HIGH > MEDIUM > LOW), then by time within the same level
   const severityOrder = { high: 0, medium: 1, low: 2 };
   issues.sort((a, b) => {
     const sa = severityOrder[a.severity] ?? 1;
@@ -253,7 +254,7 @@ function collectIssues(auditReport, signalReport, semanticReport, qaReport, word
   return issues;
 }
 
-// --- generate HTML ---
+// --- Generate HTML ---
 
 function generateHtml(issues, audioPath, qaReport, auditReport, semanticReport) {
   const totalIssues = issues.length;
@@ -271,11 +272,11 @@ function generateHtml(issues, audioPath, qaReport, auditReport, semanticReport) 
   const issuesJson = JSON.stringify(issues);
 
   return `<!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-TW">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>终审 — 播客质检报告</title>
+<title>終審 — 播客品質檢測報告</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
@@ -284,7 +285,7 @@ function generateHtml(issues, audioPath, qaReport, auditReport, semanticReport) 
     padding-bottom: 120px;
   }
 
-  /* --- 顶部audio播放器 --- */
+  /* --- Top audio player --- */
   .player-bar {
     position: sticky; top: 0; z-index: 100;
     background: #1e293b; color: #f1f5f9;
@@ -299,7 +300,7 @@ function generateHtml(issues, audioPath, qaReport, auditReport, semanticReport) 
   .player-bar .speed-btn.active { background: #3b82f6; color: #fff; }
   .player-bar .current-time { font-variant-numeric: tabular-nums; min-width: 50px; }
 
-  /* --- statistics面板 --- */
+  /* --- Stats panel --- */
   .stats-panel {
     max-width: 960px; margin: 24px auto; padding: 20px 24px;
     background: #fff; border-radius: 12px;
@@ -317,7 +318,7 @@ function generateHtml(issues, audioPath, qaReport, auditReport, semanticReport) 
   .score-ok { color: #f59e0b; }
   .score-bad { color: #dc2626; }
 
-  /* --- 筛选栏 --- */
+  /* --- Filter bar --- */
   .filter-bar {
     max-width: 960px; margin: 0 auto 16px; padding: 0 24px;
     display: flex; gap: 8px; flex-wrap: wrap; align-items: center;
@@ -333,7 +334,7 @@ function generateHtml(issues, audioPath, qaReport, auditReport, semanticReport) 
     padding: 1px 6px; margin-left: 4px;
   }
 
-  /* --- Issuecolumn表 --- */
+  /* --- Issue list --- */
   .issues-container { max-width: 960px; margin: 0 auto; padding: 0 24px; }
   .issue-card {
     background: #fff; border-radius: 10px; padding: 16px 20px; margin-bottom: 12px;
@@ -398,14 +399,14 @@ function generateHtml(issues, audioPath, qaReport, auditReport, semanticReport) 
   }
   .issue-note-input:focus { border-color: #3b82f6; }
 
-  /* --- 空status --- */
+  /* --- Empty state --- */
   .empty-state {
     text-align: center; padding: 60px 20px; color: #64748b;
   }
   .empty-state .icon { font-size: 48px; margin-bottom: 16px; }
   .empty-state h2 { color: #1e293b; margin-bottom: 8px; }
 
-  /* --- 底部操作栏 --- */
+  /* --- Bottom action bar --- */
   .action-bar {
     position: fixed; bottom: 0; left: 0; right: 0;
     background: #fff; border-top: 1px solid #e2e8f0;
@@ -427,7 +428,7 @@ function generateHtml(issues, audioPath, qaReport, auditReport, semanticReport) 
     font-size: 13px; color: #64748b; align-self: center;
   }
 
-  /* --- response式 --- */
+  /* --- Responsive --- */
   @media (max-width: 640px) {
     .stats-panel { grid-template-columns: repeat(2, 1fr); }
     .action-bar { flex-wrap: wrap; }
@@ -437,7 +438,7 @@ function generateHtml(issues, audioPath, qaReport, auditReport, semanticReport) 
 </head>
 <body>
 
-<!-- audio播放器 -->
+<!-- Audio player -->
 <div class="player-bar">
   <span class="current-time" id="currentTime">0:00</span>
   <audio id="audioPlayer" controls preload="metadata">
@@ -451,27 +452,27 @@ function generateHtml(issues, audioPath, qaReport, auditReport, semanticReport) 
   </span>
 </div>
 
-<!-- statistics面板 -->
+<!-- Stats panel -->
 <div class="stats-panel">
   <div class="stat-card">
     <div class="stat-value ${getScoreClass(overallScore)}">${overallScore}</div>
-    <div class="stat-label">综合评 min </div>
+    <div class="stat-label">綜合評分</div>
   </div>
   <div class="stat-card">
     <div class="stat-value ${getScoreClass(signalScore)}">${signalScore}</div>
-    <div class="stat-label">信号评 min </div>
+    <div class="stat-label">訊號評分</div>
   </div>
   <div class="stat-card">
     <div class="stat-value ${getScoreClass(aiScore)}">${aiScore}</div>
-    <div class="stat-label">AI 听感</div>
+    <div class="stat-label">AI 聽感</div>
   </div>
   <div class="stat-card">
     <div class="stat-value">${duration}</div>
-    <div class="stat-label">成品duration</div>
+    <div class="stat-label">成品時長</div>
   </div>
   <div class="stat-card">
     <div class="stat-value">${totalIssues}</div>
-    <div class="stat-label">待检Issue</div>
+    <div class="stat-label">待檢問題</div>
   </div>
   <div class="stat-card">
     <div class="stat-value" style="color: #dc2626;">${highCount}</div>
@@ -479,37 +480,37 @@ function generateHtml(issues, audioPath, qaReport, auditReport, semanticReport) 
   </div>
 </div>
 
-<!-- 筛选栏 -->
+<!-- Filter bar -->
 <div class="filter-bar">
-  <button class="filter-btn active" data-filter="all">full部<span class="filter-count">${totalIssues}</span></button>
+  <button class="filter-btn active" data-filter="all">全部<span class="filter-count">${totalIssues}</span></button>
   <button class="filter-btn" data-filter="high">HIGH<span class="filter-count">${highCount}</span></button>
   <button class="filter-btn" data-filter="medium">MEDIUM<span class="filter-count">${mediumCount}</span></button>
   <button class="filter-btn" data-filter="low">LOW<span class="filter-count">${lowCount}</span></button>
   <span style="color:#cbd5e1">|</span>
-  <button class="filter-btn" data-filter="data">data layer</button>
-  <button class="filter-btn" data-filter="signal">信号层</button>
-  <button class="filter-btn" data-filter="semantic">语义层</button>
-  <button class="filter-btn" data-filter="unconfirmed">未confirm</button>
+  <button class="filter-btn" data-filter="data">資料層</button>
+  <button class="filter-btn" data-filter="signal">訊號層</button>
+  <button class="filter-btn" data-filter="semantic">語義層</button>
+  <button class="filter-btn" data-filter="unconfirmed">未確認</button>
 </div>
 
-<!-- Issuecolumn表 -->
+<!-- Issue list -->
 <div class="issues-container" id="issuesList">
 </div>
 
-<!-- 底部操作栏 -->
+<!-- Bottom action bar -->
 <div class="action-bar">
-  <span class="summary-text" id="actionSummary">已confirm 0/${totalIssues}</span>
-  <button class="action-btn btn-export" onclick="exportFeedback()">导出feedback</button>
-  <button class="action-btn btn-approve" onclick="approveAll()">confirm无Issue</button>
-  <button class="action-btn btn-reject" onclick="rejectWithIssues()">needs重剪</button>
+  <span class="summary-text" id="actionSummary">已確認 0/${totalIssues}</span>
+  <button class="action-btn btn-export" onclick="exportFeedback()">匯出回饋</button>
+  <button class="action-btn btn-approve" onclick="approveAll()">確認無問題</button>
+  <button class="action-btn btn-reject" onclick="rejectWithIssues()">需要重剪</button>
 </div>
 
 <script>
-// --- data ---
+// --- Data ---
 const issues = ${issuesJson};
 const issueStates = {};  // id -> { status: 'pending'|'ok'|'flagged', note: '' }
 
-// --- audio控制 ---
+// --- Audio controls ---
 const audio = document.getElementById('audioPlayer');
 const currentTimeEl = document.getElementById('currentTime');
 
@@ -537,7 +538,7 @@ function seekTo(time) {
   audio.play();
 }
 
-// --- 渲染 ---
+// --- Render ---
 function renderIssues(filter) {
   const container = document.getElementById('issuesList');
 
@@ -577,10 +578,10 @@ function renderIssues(filter) {
         \` : ''}
         <div class="issue-actions">
           <button class="confirm-btn \${state.status === 'ok' ? 'confirmed-ok' : ''}"
-            onclick="markIssue('\${issue.id}', 'ok')">&#10003; 无Issue</button>
+            onclick="markIssue('\${issue.id}', 'ok')">&#10003; 無問題</button>
           <button class="confirm-btn \${state.status === 'flagged' ? 'flagged' : ''}"
-            onclick="markIssue('\${issue.id}', 'flagged')">&#10007; 有Issue</button>
-          <input class="issue-note-input" placeholder="备注..."
+            onclick="markIssue('\${issue.id}', 'flagged')">&#10007; 有問題</button>
+          <input class="issue-note-input" placeholder="備註..."
             value="\${esc(state.note)}"
             onchange="updateNote('\${issue.id}', this.value)">
         </div>
@@ -595,10 +596,10 @@ function esc(s) {
   return d.innerHTML;
 }
 
-// --- status管理 ---
+// --- State management ---
 function markIssue(id, status) {
   if (!issueStates[id]) issueStates[id] = { status: 'pending', note: '' };
-  // 点击同一按钮 = cancel
+  // Clicking the same button again = cancel
   if (issueStates[id].status === status) {
     issueStates[id].status = 'pending';
   } else {
@@ -620,10 +621,10 @@ function updateUI() {
 
 function updateSummary() {
   const confirmed = Object.values(issueStates).filter(s => s.status !== 'pending').length;
-  document.getElementById('actionSummary').textContent = \`已confirm \${confirmed}/\${issues.length}\`;
+  document.getElementById('actionSummary').textContent = \`已確認 \${confirmed}/\${issues.length}\`;
 }
 
-// --- 筛选 ---
+// --- Filter ---
 document.querySelectorAll('.filter-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     document.querySelectorAll('.filter-btn').forEach(b => b.classList.remove('active'));
@@ -632,10 +633,10 @@ document.querySelectorAll('.filter-btn').forEach(btn => {
   });
 });
 
-// --- 操作 ---
+// --- Actions ---
 function approveAll() {
   const unconfirmed = issues.filter(i => !issueStates[i.id] || issueStates[i.id].status === 'pending');
-  if (unconfirmed.length > 0 && !confirm(\`还有 \${unconfirmed.length} 条未confirm Issue。确定full部标记为无Issue？\`)) return;
+  if (unconfirmed.length > 0 && !confirm(\`還有 \${unconfirmed.length} 條未確認問題。確定全部標記為無問題？\`)) return;
   for (const issue of issues) {
     if (!issueStates[issue.id] || issueStates[issue.id].status === 'pending') {
       issueStates[issue.id] = { status: 'ok', note: issueStates[issue.id]?.note || '' };
@@ -701,7 +702,7 @@ function exportFeedback(verdict) {
   }
 }
 
-// --- 初始化 ---
+// --- Init ---
 renderIssues('all');
 </script>
 </body>
@@ -716,7 +717,7 @@ function getScoreClass(score) {
   return 'score-bad';
 }
 
-// --- 主逻辑 ---
+// --- Main ---
 
 function main() {
   const opts = parseArgs();
@@ -729,31 +730,31 @@ function main() {
   console.log('Stage 8: generate final review page');
   console.log('='.repeat(50));
 
-  // readinput
+  // Read inputs
   const auditReport = readJsonSafe(opts.audit_report);
   const signalReport = readJsonSafe(opts.signal_report);
   const semanticReport = readJsonSafe(opts.semantic_report);
   const qaReport = readJsonSafe(opts.qa_report);
   const words = readJsonSafe(opts.words);
 
-  console.log(`data layer报告: ${auditReport ? 'Loaded' : '未提供'}`);
-  console.log(`信号层报告: ${signalReport ? 'Loaded' : '未提供'}`);
-  console.log(`语义层报告: ${semanticReport ? 'Loaded' : '未提供'}`);
-  console.log(`综合报告:   ${qaReport ? 'Loaded' : '未提供'}`);
-  console.log(`word-leveltime戳: ${words ? 'Loaded' : '未提供'}`);
+  console.log(`資料層報告：${auditReport ? 'Loaded' : '未提供'}`);
+  console.log(`訊號層報告：${signalReport ? 'Loaded' : '未提供'}`);
+  console.log(`語義層報告：${semanticReport ? 'Loaded' : '未提供'}`);
+  console.log(`綜合報告：  ${qaReport ? 'Loaded' : '未提供'}`);
+  console.log(`word-level 時間戳：${words ? 'Loaded' : '未提供'}`);
 
-  // mergeIssue
+  // Merge issues
   const issues = collectIssues(auditReport, signalReport, semanticReport, qaReport, words);
-  console.log(`\nmerge后Issuetotal count: ${issues.length}`);
+  console.log(`\n合併後問題總數：${issues.length}`);
   console.log(`  HIGH: ${issues.filter(i => i.severity === 'high').length}`);
   console.log(`  MEDIUM: ${issues.filter(i => i.severity === 'medium').length}`);
   console.log(`  LOW: ${issues.filter(i => i.severity === 'low').length}`);
 
-  // generate HTML
+  // Generate HTML
   const html = generateHtml(issues, opts.audio, qaReport, auditReport, semanticReport);
 
   fs.writeFileSync(opts.output, html, 'utf8');
-  console.log(`\n终审页面Generated: ${opts.output}`);
+  console.log(`\n終審頁面已產生：${opts.output}`);
 
   if (issues.length === 0) {
     console.log('\nNo QA issues; can be confirmed directly.');

@@ -1,26 +1,28 @@
 #!/usr/bin/env python3
 """
-成品silence裁剪 — 将audio中所有超threshold pause裁剪到目标duration。
+Final-cut silence trimmer — trim every above-threshold pause down to a target duration.
 
 Usage:
   python3 trim_silences.py input.mp3 [output.mp3] [--threshold 0.8] [--target 0.6] [--noise -30]
 
-argument:
-  input.mp3       inputaudio file
-  output.mp3      outputfile（default: 在inputfile名后加 _trimmed）
-  --threshold T   detectthreshold：超 T s silence会被裁剪（default: 0.8）
-  --target T      目标duration：eachsegmentsilence裁剪到 T s（default: 0.6）
-  --noise N       silencedetect噪声threshold dB（default: -30）
+Args:
+  input.mp3       input audio file
+  output.mp3      output file (default: append _trimmed to the input filename)
+  --threshold T   detection threshold: silences longer than T seconds are trimmed (default: 0.8)
+  --target T      target duration: each silence is trimmed to T seconds (default: 0.6)
+  --noise N       silencedetect noise threshold in dB (default: -30)
 
-how it works:
-  1. FFmpeg silencedetect 扫描所有超threshold silence segment
-  2. eachsegmentsilencekeep target s（前后各 target/2 s），裁掉multi余部 min 
-  3. use  atrim + concat 拼接所有keep segment
-  4. encode为 MP3
+How it works:
+  1. FFmpeg silencedetect scans every silence segment exceeding the threshold
+  2. Each silence keeps `target` seconds (target/2 on each side); the rest is trimmed
+  3. atrim + concat are used to splice the kept segments
+  4. Encoded back to MP3
 
-典型场景:
-  - cut_audio.py 出成品后，deletecontent前后 短silencemerge成长pause
-  - 直接use 成品audio扫一遍比反推 delete_segments 更简single可靠
+Typical scenarios:
+  - After cut_audio.py produces the final cut, short silences around deleted content
+    can merge into long pauses
+  - Scanning the final audio directly is simpler and more reliable than back-deriving
+    from delete_segments
 """
 
 import json
@@ -34,7 +36,7 @@ sys.stderr.reconfigure(line_buffering=True)
 
 
 def detect_silences(audio_file, threshold, noise_db):
-    """use  FFmpeg silencedetect 找出所有超 threshold  silence segment"""
+    """Use FFmpeg silencedetect to find every silence segment over `threshold`."""
     cmd = [
         'ffmpeg', '-i', audio_file,
         '-af', f'silencedetect=noise={noise_db}dB:d={threshold}',
@@ -56,7 +58,7 @@ def detect_silences(audio_file, threshold, noise_db):
 
 
 def get_duration(audio_file):
-    """获取audiototal duration"""
+    """Get total audio duration."""
     result = subprocess.run(
         ['ffprobe', '-v', 'error', '-show_entries',
          'format=duration', '-of', 'default=noprint_wrappers=1:nokey=1',
@@ -67,7 +69,7 @@ def get_duration(audio_file):
 
 
 def build_keep_segments(silences, total_duration, target):
-    """根据silence segmentcalculatekeep segment（裁掉eachsegmentsilence中超 target  部 min ）"""
+    """Compute kept segments from silence segments (trim everything beyond `target` per silence)."""
     half = target / 2.0
 
     trim_segments = []
@@ -125,20 +127,20 @@ def main():
         output_file = f"{base}_trimmed{ext}"
 
     if not os.path.exists(input_file):
-        print(f"not foundinputfile: {input_file}")
+        print(f"找不到輸入檔案：{input_file}")
         sys.exit(1)
 
-    # 1. detectsilence
-    print(f"🔍 扫描 >{threshold}s  silence segment（noise={noise_db}dB）...")
+    # 1. Detect silences
+    print(f"🔍 掃描 >{threshold}s 的靜音片段（noise={noise_db}dB）...")
     silences = detect_silences(input_file, threshold, noise_db)
-    print(f"   detect到 {len(silences)} 个超 {threshold}s  pause")
+    print(f"   偵測到 {len(silences)} 個超過 {threshold}s 的停頓")
 
     if not silences:
-        print("✅ 无needs 裁剪")
+        print("✅ 無需裁剪")
         return
 
-    #  min 布statistics
-    bins = {'短': 0, '中': 0, '长': 0}
+    # Distribution stats
+    bins = {'短': 0, '中': 0, '長': 0}
     total_excess = 0
     for s in silences:
         if s['duration'] < 1.0:
@@ -146,20 +148,20 @@ def main():
         elif s['duration'] < 2.0:
             bins['中'] += 1
         else:
-            bins['长'] += 1
+            bins['長'] += 1
         total_excess += s['duration'] - target
 
-    print(f"    min 布: 短(<1s)={bins['短']}  中(1-2s)={bins['中']}  长(>2s)={bins['长']}")
-    print(f"   总multi余silence: {total_excess:.1f}s")
+    print(f"   分佈：短(<1s)={bins['短']}  中(1-2s)={bins['中']}  長(>2s)={bins['長']}")
+    print(f"   多餘靜音總量：{total_excess:.1f}s")
 
-    # 2. calculatekeep segment
+    # 2. Compute kept segments
     total_duration = get_duration(input_file)
     keep_segments = build_keep_segments(silences, total_duration, target)
 
     new_duration = sum(e - s for s, e in keep_segments)
-    print(f"   source: {total_duration/60:.1f}min → 裁剪后: {new_duration/60:.1f}min")
+    print(f"   原始：{total_duration/60:.1f}min → 裁剪後：{new_duration/60:.1f}min")
 
-    # 3. 构建 FFmpeg filter
+    # 3. Build the FFmpeg filter
     print(f"✂️  裁剪中...")
 
     filter_parts = []
@@ -175,14 +177,14 @@ def main():
     with open(filter_file, 'w') as f:
         f.write(filter_script)
 
-    # 确保不write同一file
+    # Make sure we don't write to the same file
     temp_output = output_file
     same_file = os.path.abspath(input_file) == os.path.abspath(output_file)
     if same_file:
         base, ext = os.path.splitext(output_file)
         temp_output = f"{base}_tmp{ext}"
 
-    # 探测源fileencodeargument，matchoutput质量
+    # Probe the source encoding parameters to match output quality
     probe = subprocess.run(
         ['ffprobe', '-v', 'error', '-select_streams', 'a:0',
          '-show_entries', 'stream=bit_rate,sample_rate,channels',
@@ -217,7 +219,7 @@ def main():
     result = subprocess.run(cmd, capture_output=True, text=True)
 
     if result.returncode != 0:
-        print(f"❌ FFmpeg Error:\n{result.stderr[-500:]}")
+        print(f"❌ FFmpeg 錯誤：\n{result.stderr[-500:]}")
         sys.exit(1)
 
     if same_file:
@@ -225,11 +227,11 @@ def main():
 
     os.remove(filter_file)
 
-    # 4. 验证
+    # 4. Verify
     final_duration = get_duration(output_file)
     saved = total_duration - final_duration
-    print(f"✅ Complete: {output_file}")
-    print(f"   {total_duration/60:.1f}min → {final_duration/60:.1f}min（saved {saved:.0f}s）")
+    print(f"✅ 完成：{output_file}")
+    print(f"   {total_duration/60:.1f}min → {final_duration/60:.1f}min（節省 {saved:.0f}s）")
 
 
 if __name__ == '__main__':

@@ -1,34 +1,35 @@
 #!/usr/bin/env python3
 """
-波形 onset detection — 在指定time点附近search能量谷底，精修切割边界。
+Waveform onset detection — search the energy valley near a given time point to
+refine cut boundaries.
 
 Usage:
   python3 refine_boundaries.py --audio <path> --points '<JSON>'
   python3 refine_boundaries.py --audio <path> --points-file <path.json>
 
-input JSON format:
+Input JSON format:
   [
     {"time": 691.79, "search_window": 0.15, "direction": "both"},
     {"time": 45.32, "search_window": 0.10, "direction": "left"},
     ...
   ]
 
-  - time: 待精修 time点（s）
-  - search_window: search窗口half径（s），default 0.15
-  - direction: "left"=只向左search, "right"=只向右search, "both"=dual向（default）
+  - time: time point to refine (seconds)
+  - search_window: half-width of the search window (seconds), default 0.15
+  - direction: "left" = search left only, "right" = search right only, "both" = both directions (default)
 
-output JSON:
+Output JSON:
   [
     {"original": 691.79, "refined": 691.82, "confidence": 0.85, "energy_drop_db": 4.2},
     ...
   ]
 
-how it works:
-  1. use  FFmpeg decode目标intervalaudio为 raw PCM
-  2. calculate RMS 能量pack络（5ms frame，3 frame滑动平均）
-  3. 在search窗口内找能量最低谷底
-  4. 谷底必须 ≥3dB below local mean 才被认为是可靠 音节边界
-  5. 不满足then返回sourcetime点（confidence=0，fallback 到线性插值）
+How it works:
+  1. Use FFmpeg to decode the target interval to raw PCM
+  2. Compute the RMS energy envelope (5ms frames, 3-frame moving average)
+  3. Find the deepest energy valley inside the search window
+  4. The valley must be ≥3dB below the local mean to be considered a reliable syllable boundary
+  5. If unmet, return the original time point (confidence=0, fall back to linear interpolation)
 """
 
 import json
@@ -41,18 +42,18 @@ import argparse
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
-# ── constant ──────────────────────────────────────────────
-SAMPLE_RATE = 16000        # decode采样率（16kHz 足够do能量analyze）
-FRAME_MS = 5               # 能量frame长度（毫s）
-SMOOTH_FRAMES = 3          # 滑动平均frame数
-MIN_DROP_DB = 3.0          # 谷底最小深度（相OK局部mean）
-EXTRA_MARGIN = 0.05        # 额外decode余量（s），避免边界效应
+# ── Constants ──────────────────────────────────────────────
+SAMPLE_RATE = 16000        # decode sample rate (16kHz is enough for energy analysis)
+FRAME_MS = 5               # energy frame length (ms)
+SMOOTH_FRAMES = 3          # moving-average window (frames)
+MIN_DROP_DB = 3.0          # minimum valley depth (relative to local mean)
+EXTRA_MARGIN = 0.05        # extra decode margin (seconds) to avoid boundary effects
 
 
 def decode_segment(audio_path, start_sec, duration_sec):
     """
-    use  FFmpeg decode指定interval为 16kHz mono s16le PCM。
-    返回 numpy-like   float 采样array。
+    Use FFmpeg to decode the given interval as 16kHz mono s16le PCM.
+    Returns a numpy-like list of float samples.
     """
     cmd = [
         'ffmpeg', '-v', 'quiet',
@@ -67,11 +68,11 @@ def decode_segment(audio_path, start_sec, duration_sec):
     ]
     result = subprocess.run(cmd, capture_output=True)
     if result.returncode != 0:
-        print(f"  ⚠️ FFmpeg decodeFailed: start={start_sec:.4f}, dur={duration_sec:.4f}", file=sys.stderr)
+        print(f"  ⚠️ FFmpeg 解碼失敗：start={start_sec:.4f}, dur={duration_sec:.4f}", file=sys.stderr)
         return []
 
     raw = result.stdout
-    # decode s16le 到 float [-1, 1]
+    # decode s16le to float [-1, 1]
     n_samples = len(raw) // 2
     if n_samples == 0:
         return []
@@ -81,12 +82,12 @@ def decode_segment(audio_path, start_sec, duration_sec):
 
 def compute_rms_envelope(samples, frame_size, smooth_n):
     """
-    calculate RMS 能量pack络。
+    Compute the RMS energy envelope.
 
     Args:
-        samples: float 采样array
-        frame_size: eachframe采样数
-        smooth_n: 滑动平均窗口
+        samples: list of float samples
+        frame_size: samples per frame
+        smooth_n: moving-average window
 
     Returns:
         list of (frame_center_sample_idx, rms_value)
@@ -103,7 +104,7 @@ def compute_rms_envelope(samples, frame_size, smooth_n):
     if len(frames) < smooth_n:
         return frames
 
-    # 滑动平均平滑
+    # Apply moving-average smoothing
     smoothed = []
     half = smooth_n // 2
     for i in range(len(frames)):
@@ -117,17 +118,17 @@ def compute_rms_envelope(samples, frame_size, smooth_n):
 
 def find_energy_valley(envelope, search_start_idx, search_end_idx, direction, center_frame_idx=None):
     """
-    在能量pack络 指定range内找最近 合格谷底（局部最小值）。
+    Find the nearest qualifying valley (local minimum) in the given range of the energy envelope.
 
-    策略：找出所有局部最小值 → 滤深度 ≥ MIN_DROP_DB → 选最近 。
-    e.g.果no合格谷底，返回最深 那个（低信心度）。
+    Strategy: locate all local minima → keep those with depth ≥ MIN_DROP_DB → pick the nearest.
+    If none qualify, return the deepest (with low confidence).
 
     Args:
-        envelope: [(sample_idx, rms)] 已平滑 能量pack络
-        search_start_idx: search起始frameindex
-        search_end_idx: searchEndframeindex
+        envelope: [(sample_idx, rms)] smoothed energy envelope
+        search_start_idx: search start frame index
+        search_end_idx: search end frame index
         direction: "left", "right", "both"
-        center_frame_idx: sourcetime点OK应 frameindex（use 于"最近"sort）
+        center_frame_idx: frame index of the original time point (used to rank by "nearness")
 
     Returns:
         (valley_frame_idx, confidence, energy_drop_db) or (None, 0, 0)
@@ -147,7 +148,7 @@ def find_energy_valley(envelope, search_start_idx, search_end_idx, direction, ce
     if mean_rms <= 1e-10:
         return None, 0, 0
 
-    # 方向滤
+    # Direction filter
     center_in_search = len(rms_values) // 2
     if direction == "left":
         active_range = range(0, center_in_search + 1)
@@ -156,7 +157,7 @@ def find_energy_valley(envelope, search_start_idx, search_end_idx, direction, ce
     else:
         active_range = range(0, len(rms_values))
 
-    # 找所有局部最小值（比两侧邻居都低 frame）
+    # Find all local minima (frames lower than both neighbours)
     local_mins = []
     for i in active_range:
         rms = rms_values[i]
@@ -174,19 +175,19 @@ def find_energy_valley(envelope, search_start_idx, search_end_idx, direction, ce
     if not local_mins:
         return None, 0, 0
 
-    #  min 为合格（≥MIN_DROP_DB） and 不合格
+    # Split into qualifying (≥ MIN_DROP_DB) and non-qualifying
     qualified = [m for m in local_mins if m[1] >= MIN_DROP_DB]
 
     if qualified:
-        # 选最近 合格谷底
+        # Pick the nearest qualifying valley
         best = min(qualified, key=lambda m: m[2])
     else:
-        # no合格 ，选最深 （低信心度）
+        # Nothing qualifies — pick the deepest (low confidence)
         best = max(local_mins, key=lambda m: m[1])
 
     valley_idx, drop_db, _ = best
 
-    # 信心度
+    # Confidence
     if drop_db >= MIN_DROP_DB:
         confidence = min(1.0, 0.5 + (drop_db - MIN_DROP_DB) / (MIN_DROP_DB * 3))
     else:
@@ -197,10 +198,10 @@ def find_energy_valley(envelope, search_start_idx, search_end_idx, direction, ce
 
 def refine_point(audio_path, point):
     """
-    精修single个time点。
+    Refine a single time point.
 
     Args:
-        audio_path: audio filepath
+        audio_path: audio file path
         point: {"time": float, "search_window": float, "direction": str}
 
     Returns:
@@ -210,7 +211,7 @@ def refine_point(audio_path, point):
     search_window = point.get("search_window", 0.15)
     direction = point.get("direction", "both")
 
-    # decodeinterval：time ± (search_window + margin)
+    # decode interval: time ± (search_window + margin)
     decode_start = max(0, time - search_window - EXTRA_MARGIN)
     decode_duration = (search_window + EXTRA_MARGIN) * 2
 
@@ -218,18 +219,18 @@ def refine_point(audio_path, point):
     if not samples:
         return {"original": time, "refined": time, "confidence": 0, "energy_drop_db": 0}
 
-    # calculate能量pack络
+    # Compute the energy envelope
     frame_size = SAMPLE_RATE * FRAME_MS // 1000  # 5ms @ 16kHz = 80 samples
     envelope = compute_rms_envelope(samples, frame_size, SMOOTH_FRAMES)
 
     if not envelope:
         return {"original": time, "refined": time, "confidence": 0, "energy_drop_db": 0}
 
-    # 确定searchrange（exclude margin 区域）
+    # Determine the search range (excluding the margin region)
     search_start_sample = int(EXTRA_MARGIN * SAMPLE_RATE)
     search_end_sample = int((EXTRA_MARGIN + search_window * 2) * SAMPLE_RATE)
 
-    # 映射到frameindex
+    # Map to frame indices
     search_start_frame = 0
     search_end_frame = len(envelope)
     for i, (center, _) in enumerate(envelope):
@@ -239,11 +240,11 @@ def refine_point(audio_path, point):
             search_end_frame = i
             break
 
-    # sourcetime点OK应 frameindex（use 于选最近谷底）
+    # Frame index of the original time point (used to pick the nearest valley)
     center_sample = int((time - decode_start) * SAMPLE_RATE)
     center_frame = min(range(len(envelope)), key=lambda i: abs(envelope[i][0] - center_sample))
 
-    # 找谷底（选最近 合格谷底）
+    # Find the valley (pick the nearest qualifying one)
     valley_frame_idx, confidence, drop_db = find_energy_valley(
         envelope, search_start_frame, search_end_frame, direction, center_frame
     )
@@ -256,7 +257,7 @@ def refine_point(audio_path, point):
             "energy_drop_db": round(drop_db, 2)
         }
 
-    # 谷底frame 采样index → 绝OKtime
+    # Sample index of the valley frame → absolute time
     valley_sample = envelope[valley_frame_idx][0]
     refined_time = decode_start + valley_sample / SAMPLE_RATE
 
@@ -269,30 +270,30 @@ def refine_point(audio_path, point):
 
 
 def main():
-    parser = argparse.ArgumentParser(description='waveform onset detection refinement切割边界')
-    parser.add_argument('--audio', required=True, help='audio filepath')
-    parser.add_argument('--points', help='待精修time点 JSON character符串')
-    parser.add_argument('--points-file', help='待精修time点 JSON filepath')
+    parser = argparse.ArgumentParser(description='Waveform onset-detection refinement of cut boundaries')
+    parser.add_argument('--audio', required=True, help='audio file path')
+    parser.add_argument('--points', help='JSON string of time points to refine')
+    parser.add_argument('--points-file', help='JSON file path of time points to refine')
     args = parser.parse_args()
 
     if not os.path.exists(args.audio):
         print(json.dumps({"error": f"audio file does not exist: {args.audio}"}))
         sys.exit(1)
 
-    # readtime点
+    # Read time points
     if args.points_file:
         with open(args.points_file) as f:
             points = json.load(f)
     elif args.points:
         points = json.loads(args.points)
     else:
-        print(json.dumps({"error": "必须提供 --points  or  --points-file"}))
+        print(json.dumps({"error": "必須提供 --points 或 --points-file"}))
         sys.exit(1)
 
     if not isinstance(points, list):
         points = [points]
 
-    print(f"🔍 精修 {len(points)} 个切割点...", file=sys.stderr)
+    print(f"🔍 精修 {len(points)} 個切割點...", file=sys.stderr)
 
     results = []
     for i, pt in enumerate(points):
@@ -308,7 +309,7 @@ def main():
         )
         results.append(result)
 
-    # output JSON 到 stdout
+    # Output JSON to stdout
     print(json.dumps(results, ensure_ascii=False, indent=2))
 
 

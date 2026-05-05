@@ -240,7 +240,7 @@ node <skill_dir>/scripts/semantic_review.js \
 
 | Check | What | How |
 | --- | --- | --- |
-| **C1 residual fillers** | leftover 嗯/啊/那个/对/就是 after the cut | pattern match the re-transcript |
+| **C1 residual fillers** | leftover 嗯/啊/那個/對/就是 after the cut | pattern match the re-transcript |
 | **C2 residual stutters** | leftover 我我 / 他他 patterns | repetition pattern detection |
 | **C3 semantic break** | discontinuity around a cut point | Claude evaluates a 10-sentence window |
 | **C4 missing content** | content that should have been kept is gone | word-level LCS alignment gaps |

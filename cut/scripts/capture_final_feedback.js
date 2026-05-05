@@ -1,18 +1,18 @@
 #!/usr/bin/env node
 /**
- * capture_final_feedback.js — Stage 8: final-review feedback capture → 持久化学习
+ * capture_final_feedback.js — Stage 8: capture final-review feedback into persistent learning storage.
  *
- * read终审页面导出  final_review_feedback.json，
- * 将use 户标记 Issue min 类后路by 到OK应 持久化存储：
- *   - method论Issue → baseedit规rule/ 相关file
- *   - personal preferencesIssue → user preferences/<userId>/editing_rules/
+ * Reads final_review_feedback.json exported from the final-review page,
+ * classifies user-flagged issues, and routes them to the right persistence:
+ *   - methodology issues → editing-rules/* shared files
+ *   - personal-preference issues → user-prefs/<userId>/editing_rules/
  *
  * Usage:
  *   node capture_final_feedback.js \
  *     --feedback <final_review_feedback.json> \
  *     [--user <userId>]
  *
- * 依赖: user_manager.js（读写user preferences）
+ * Dependencies: user_manager.js (reads/writes user preferences)
  */
 
 const fs = require('fs');
@@ -31,54 +31,54 @@ function parseArgs() {
   return opts;
 }
 
-// --- Issue min 类 ---
+// --- Issue classification ---
 
 /**
- * 将质检Issue min 类为method论 vs personal preferences
+ * Classify a QA issue as methodology vs personal preference.
  *
- * method论（write baseedit规rule/）：
- *   - detect算法缺陷（missed detection stutter/filler/repetition）
- *   - 切点质量Issue（energy_jump, spectral 等信号层Issue）
- *   - content缺失（误删有价值content）
+ * Methodology (writes to editing-rules/):
+ *   - detection-algorithm gaps (missed stutter/filler/repetition)
+ *   - cut-point quality (energy_jump, spectral, etc.)
+ *   - missing content (valuable content wrongly deleted)
  *
- * personal preferences（write user preferences/<userId>/）：
- *   - 残留filler去留（有人觉"嗯"该留，有人觉该删）
- *   - delete激进度调整
- *   - 特定word keep/delete
+ * Personal preference (writes to user-prefs/<userId>/):
+ *   - residual filler retention (some people keep "嗯", others remove it)
+ *   - deletion aggressiveness
+ *   - keep/delete preferences for specific words
  */
 function classifyIssue(issue) {
   const type = issue.type || '';
   const layer = issue.layer || '';
 
-  // 信号层Issue → method论（切点算法needs改进）
+  // Signal-layer issue → methodology (cut-point algorithm needs work)
   if (layer === 'signal' || layer === 'signal_ai') {
     return 'methodology';
   }
 
-  // data layerIssue → method论（审计逻辑needs改进）
+  // Data-layer issue → methodology (audit logic needs work)
   if (layer === 'data') {
     return 'methodology';
   }
 
-  // 语义层：content缺失 → method论
+  // Semantic layer: missing content → methodology
   if (type === 'missing_content') {
     return 'methodology';
   }
 
-  // 语义层：残留filler/卡顿 → personal preferences（whether该删取决于use 户）
+  // Semantic layer: residual filler/stutter → preference (user-dependent)
   if (type === 'residual_filler' || type === 'residual_stutter') {
     return 'preference';
   }
 
-  // default → method论
+  // Default → methodology
   return 'methodology';
 }
 
-// --- feedback路by  ---
+// --- Feedback routing ---
 
 /**
- * 将method论feedbackrecord到学习历史
- * （实际规thenupdateby  Claude 在readfeedback后判断执line）
+ * Append methodology feedback to learning history.
+ * (The actual rule updates are decided by Claude after reading the feedback.)
  */
 function routeMethodologyFeedback(events, userId) {
   if (events.length === 0) return;
@@ -97,16 +97,16 @@ function routeMethodologyFeedback(events, userId) {
     });
   }
 
-  console.log(`  method论feedback: ${events.length} 条 → learning_history.json`);
+  console.log(`  方法論回饋：${events.length} 條 → learning_history.json`);
 }
 
 /**
- * 将personal preferencesfeedbackrecord到user preferences
+ * Append preference feedback to the user's preferences.
  */
 function routePreferenceFeedback(events, userId) {
   if (events.length === 0) return;
 
-  // record到学习历史
+  // Append to learning history
   for (const event of events) {
     userManager.appendLearningEvent(userId, {
       source: 'final_review',
@@ -119,7 +119,7 @@ function routePreferenceFeedback(events, userId) {
     });
   }
 
-  // statistics偏good信号
+  // Tally preference signals
   const fillerKept = events.filter(e =>
     e.type === 'residual_filler' && e.status === 'ok'
   ).length;
@@ -134,13 +134,13 @@ function routePreferenceFeedback(events, userId) {
   ).length;
 
   if (fillerKept > 0 || fillerFlagged > 0) {
-    console.log(`  filler偏good信号: ${fillerKept} 个觉可以留, ${fillerFlagged} 个觉该删`);
+    console.log(`  贅詞偏好訊號：${fillerKept} 個覺得可保留，${fillerFlagged} 個覺得該刪`);
   }
   if (stutterKept > 0 || stutterFlagged > 0) {
-    console.log(`  卡顿偏good信号: ${stutterKept} 个觉可以留, ${stutterFlagged} 个觉该删`);
+    console.log(`  卡頓偏好訊號：${stutterKept} 個覺得可保留，${stutterFlagged} 個覺得該刪`);
   }
 
-  console.log(`  personal preferencesfeedback: ${events.length} 条 → learning_history.json`);
+  console.log(`  個人偏好回饋：${events.length} 條 → learning_history.json`);
 }
 
 // --- 主逻辑 ---
@@ -157,29 +157,29 @@ function main() {
 
   console.log('Stage 8: final-review feedback capture');
   console.log('='.repeat(50));
-  console.log(`use 户: ${userId}`);
+  console.log(`使用者：${userId}`);
 
-  // 检查use 户exists
+  // Verify the user exists
   if (!userManager.userExists(userId)) {
-    console.error(`use 户 "${userId}" 不exists。Please 先运line node user_manager.js create ${userId}`);
+    console.error(`使用者 "${userId}" 不存在。請先執行 node user_manager.js create ${userId}`);
     process.exit(1);
   }
 
-  // readfeedback
+  // Read feedback
   if (!fs.existsSync(opts.feedback)) {
-    console.error(`feedbackfile does not exist: ${opts.feedback}`);
+    console.error(`回饋檔案不存在：${opts.feedback}`);
     process.exit(1);
   }
 
   const feedback = JSON.parse(fs.readFileSync(opts.feedback, 'utf8'));
-  console.log(`feedbackversion: ${feedback.version}`);
-  console.log(`判定result: ${feedback.verdict}`);
-  console.log(`总Issue数: ${feedback.summary?.total || 0}`);
-  console.log(`  confirm无Issue: ${feedback.summary?.confirmed_ok || 0}`);
-  console.log(`  标记有Issue: ${feedback.summary?.flagged || 0}`);
-  console.log(`  未process:     ${feedback.summary?.pending || 0}`);
+  console.log(`回饋版本：${feedback.version}`);
+  console.log(`判定結果：${feedback.verdict}`);
+  console.log(`總問題數：${feedback.summary?.total || 0}`);
+  console.log(`  確認無問題：${feedback.summary?.confirmed_ok || 0}`);
+  console.log(`  標記有問題：${feedback.summary?.flagged || 0}`);
+  console.log(`  未處理：    ${feedback.summary?.pending || 0}`);
 
-  // 只process有明确status Issue（ok  or  flagged）
+  // Only handle issues with a definite status (ok or flagged)
   const actionableIssues = (feedback.issues || []).filter(
     i => i.status === 'ok' || i.status === 'flagged'
   );
@@ -189,7 +189,7 @@ function main() {
     return;
   }
 
-  //  min 类
+  // Classify
   const methodologyIssues = [];
   const preferenceIssues = [];
 
@@ -202,15 +202,15 @@ function main() {
     }
   }
 
-  console.log(`\n min 类result:`);
-  console.log(`  method论: ${methodologyIssues.length} 条`);
-  console.log(`  personal preferences: ${preferenceIssues.length} 条`);
+  console.log(`\n分類結果：`);
+  console.log(`  方法論：${methodologyIssues.length} 條`);
+  console.log(`  個人偏好：${preferenceIssues.length} 條`);
 
-  // 路by 
+  // Route
   routeMethodologyFeedback(methodologyIssues, userId);
   routePreferenceFeedback(preferenceIssues, userId);
 
-  // record到 episode history
+  // Append to episode history
   userManager.appendEpisode(userId, {
     source: 'final_review',
     verdict: feedback.verdict,
@@ -220,7 +220,7 @@ function main() {
     confirmed_ok: feedback.summary?.confirmed_ok || 0
   });
 
-  console.log(`\nfeedback已持久化到use 户 "${userId}"  record中。`);
+  console.log(`\n回饋已持久化到使用者 "${userId}" 的記錄中。`);
 
   if (methodologyIssues.some(i => i.status === 'flagged')) {
     console.log('\nTip: methodology-level issues were flagged. Claude should review learning_history.json and consider updating editing-rules/.');

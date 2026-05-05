@@ -19,8 +19,8 @@ Words on either side overlap but aren't identical:
 
 | Source | Delete |
 | --- | --- |
-| 你再关你关掉 | "你再关" |
-| 怎么让它去有个更大的 | "怎么让它去" |
+| 你再關你關掉 | "你再關" |
+| 怎麼讓它去有個更大的 | "怎麼讓它去" |
 
 ### 2. Negation correction
 
@@ -37,7 +37,7 @@ Half a word + silence + restated complete word:
 
 | Source | Delete |
 | --- | --- |
-| 依赖[silence]依赖关系 | "依赖[silence]" |
+| 依賴[silence]依賴關係 | "依賴[silence]" |
 
 ### 4. Mid-sentence half-restart
 
@@ -47,8 +47,8 @@ Caught the slip mid-way and reorganized. The incomplete first half should go:
 | --- | --- | --- |
 | 去裁了只被我困在 | "去裁了只被" | Restarted; keep "我困在" |
 | 去裁了之被我困在 | "去裁了之被" | Same; ASR transcription may vary |
-| 五年之这五年间 | "五年之" | "五年之" is a half; corrected to "这五年间" |
-| 你的对你对世界的 | "你的对" | "你的对" is a half; corrected to "你对世界的" |
+| 五年之這五年間 | "五年之" | "五年之" is a half; corrected to "這五年間" |
+| 你的對你對世界的 | "你的對" | "你的對" is a half; corrected to "你對世界的" |
 
 ### 5. Reference correction
 
@@ -56,7 +56,7 @@ Subject or modifier was changed:
 
 | Source | Delete | Notes |
 | --- | --- | --- |
-| 你的对你对世界的观察 | "你的对" | modifier structure changed |
+| 你的對你對世界的觀察 | "你的對" | modifier structure changed |
 
 ### 6. Particle-end false start (run ending in a tone particle)
 
@@ -64,8 +64,8 @@ A phrase ends in a tone particle (呢/啊/吧/嘛), immediately followed by a mo
 
 | Source | Delete | Notes |
 | --- | --- | --- |
-| 上一期**呢**在上一期的超越百岁里边 | "上一期呢" | "呢" marks an abandoned start; "在上一期的…" is the complete restatement |
-| 关于继续我们继续讲关于这个 | "关于继续" | "关于继续" is a stitched false start; "我们继续讲关于…" is the right phrasing |
+| 上一集**呢**在上一集的超越百歲裡 | "上一集呢" | "呢" marks an abandoned start; "在上一集的…" is the complete restatement |
+| 關於繼續我們繼續講關於這個 | "關於繼續" | "關於繼續" is a stitched false start; "我們繼續講關於…" is the right phrasing |
 
 **Heuristic**: tone particles usually live at sentence end; appearing **mid-sentence** with similar content right after is likely a false start.
 
@@ -75,10 +75,10 @@ A phrase with the same prefix appears twice; the second is more complete:
 
 | Source | Delete | Notes |
 | --- | --- | --- |
-| 是一个底层，是一个底层 boss | "是一个底层，" | Second adds "boss" — more complete |
-| 在人身上在人身上电 | "在人身上" | Second adds "电" — more complete |
-| 比较慢的一个比较慢速的 | "比较慢的" | "慢速" is more precise than "慢" |
-| 中枢神经系统好像中枢神经系统没办法去 | "中枢神经系统好像" | Second uses a more definite predicate |
+| 是一個底層，是一個底層 boss | "是一個底層，" | Second adds "boss" — more complete |
+| 在人身上在人身上電 | "在人身上" | Second adds "電" — more complete |
+| 比較慢的一個比較慢速的 | "比較慢的" | "慢速" is more precise than "慢" |
+| 中樞神經系统好像中樞神經系统沒辦法去 | "中樞神經系统好像" | Second uses a more definite predicate |
 
 **Heuristic**: in a sliding window (8–12 words), find a common prefix of ≥2 chars appearing twice; if the later one is longer/more complete → delete the earlier.
 
@@ -88,8 +88,8 @@ Same meaning expressed twice with different wording:
 
 | Source | Delete | Notes |
 | --- | --- | --- |
-| 睡了一睡睡觉一晚上 | "睡了一睡" | "睡了一睡" is half; "睡觉一晚上" is the complete version |
-| 但其实更重要，但其实呃应该是。 | "但其实呃应该是。" | Second was abandoned; keep the first |
+| 睡了一睡睡覺一晚上 | "睡了一睡" | "睡了一睡" is half; "睡覺一晚上" is the complete version |
+| 但其實更重要，但其實呃應該是。 | "但其實呃應該是。" | Second was abandoned; keep the first |
 
 **Heuristic**: needs semantic understanding; pure rules can't catch it. The LLM should judge which version is more complete/fluent.
 
@@ -102,9 +102,9 @@ Speaker explicitly says a restart signal, then begins again:
 | Source | Delete | Signal |
 | --- | --- | --- |
 | hello，大家好，等一下hello，大家好 | "hello，大家好，等一下" | 等一下 |
-| 我们来讨论一下，不对，我们来讨论 | "我们来讨论一下，不对，" | 不对 |
+| 我們來討論一下，不對，我們來討論 | "我們來討論一下，不對，" | 不對 |
 
-**Signal list**: 等一下, 重来, 再说一遍, 再来, 重新说, 重新来, 不对, 说错了, 我重说, 再来一遍.
+**Signal list**: 等一下, 重來, 再説一遍, 再來, 重新説, 重新來, 不對, 説錯了, 我重説, 再來一遍.
 
 **Detection (rule layer, `run_fine_analysis.js`)**:
 1. Scan the sentence for signal words.
@@ -120,9 +120,9 @@ Speaker used the wrong noun / measure-word, immediately corrected:
 
 | Source | Delete | Notes |
 | --- | --- | --- |
-| 呃上海大学的老师，复旦大学的老师 | "呃上海大学的老师，" | School name corrected to 复旦 |
-| 有一段，有几段工作经验 | "有一段，" | measure word "一段" corrected to "几段" |
-| 一些啊几门课 | "一些啊" | "一些" corrected to the more precise "几门" |
+| 呃台灣大學的老师，交通大學的老师 | "呃台灣大學的老师，" | School name corrected to 交通 |
+| 有一段，有幾段工作經驗 | "有一段，" | measure word "一段" corrected to "幾段" |
+| 一些啊幾門課 | "一些啊" | "一些" corrected to the more precise "幾門" |
 
 **Heuristic**: in-sentence "X的Y，Z的Y" or "有A，有B" structure with X≠Z / A≠B; the earlier is the wrong version → delete it.
 
@@ -130,19 +130,19 @@ Speaker used the wrong noun / measure-word, immediately corrected:
 
 | Source | Delete | Notes |
 | --- | --- | --- |
-| 一年以后或者拿拿到 | "一年以后或者" | "或者" marks the break; what follows is the new phrasing |
-| 一个工作的经历，我或者我第一份工作 | "一个工作的经历，我或者" | "或者" marks the restatement |
+| 一年以後或者拿拿到 | "一年以後或者" | "或者" marks the break; what follows is the new phrasing |
+| 一個工作的經歷，我或者我第一份工作 | "一個工作的經歷，我或者" | "或者" marks the restatement |
 
 **Heuristic**: "或者" appears mid-sentence and both sides describe the same thing → the earlier is the abandoned version.
 
-### 12. Inserted stutter ("是也是", "改变我的改变")
+### 12. Inserted stutter ("是也是", "改變我的改變")
 
 A redundant fragment in the form "X Y X" where the first X is an extraneous false start:
 
 | Source | Delete | Notes |
 | --- | --- | --- |
-| 这个**是**也是一个 | "是" | "是" is the false start; "也是" is correct |
-| 改变**我的改变**我的情况 | "我的改变" | "改变我的改变我的" → delete the middle "我的改变" |
+| 這個**是**也是一個 | "是" | "是" is the false start; "也是" is correct |
+| 改變**我的改變**我的情况 | "我的改變" | "改變我的改變我的" → delete the middle "我的改變" |
 | 可以**去**可以去做的 | "去" | First "去" is the false start |
 
 ## Over-deletion guard (learned from restore feedback)
@@ -155,11 +155,11 @@ When two perfectly identical phrases sit adjacent, **delete only one** (usually 
 
 | Source | ❌ Wrong delete | ✅ Right delete |
 | --- | --- | --- |
-| 这条路**这条路**更适合我 | "这条路这条路" | "这条路" (one) |
-| 蛮多的**蛮多的**这个信息 | "蛮多的蛮多的" | "蛮多的" (one) |
-| 能够在**能够在**一个很大规模 | "能够在能够在" | "能够在" (one) |
-| 没有被啊**没有被**这个创造过 | "没有被啊没有被" | "没有被啊" (one) |
-| 都没有特别的，**都没有特别的** | "都没有特别的，都没有特别的" | "都没有特别的，" (one) |
+| 這條路**這條路**更適合我 | "這條路這條路" | "這條路" (one) |
+| 蠻多的**蠻多的**這個訊息 | "蠻多的蠻多的" | "蠻多的" (one) |
+| 能夠在**能夠在**一個很大規模 | "能夠在能夠在" | "能夠在" (one) |
+| 沒有被啊**沒有被**這個創造過 | "沒有被啊沒有被" | "沒有被啊" (one) |
+| 都沒有特别的，**都沒有特别的** | "都沒有特别的，都沒有特别的" | "都沒有特别的，" (one) |
 
 **Implementation**: when "X X" is detected, `deleteRange` covers only the first X (and any hesitation word in between, e.g. "啊"); keep the complete second X.
 
@@ -170,10 +170,10 @@ When unclear articulation produces a wrong-sound, if the overall meaning is stil
 | Source | ❌ Wrong delete | ✅ Right action |
 | --- | --- | --- |
 | 思**思**维 | delete 思 | keep as-is ("思思维" reads as 思维) |
-| 一**几**段经验 | delete 一 | keep as-is ("一几段" is a natural correction) |
-| 经**有**经济价值 | delete 经有 | keep as-is ("经有经济" reads as 经济) |
+| 一**幾**段經驗 | delete 一 | keep as-is ("一幾段" is a natural correction) |
+| 經**有**經濟價值 | delete 經有 | keep as-is ("經有經濟" reads as 經濟) |
 
-**Heuristic**: if deleting would break sentence integrity (e.g. only "几段" remains, missing measure-word feel), don't delete.
+**Heuristic**: if deleting would break sentence integrity (e.g. only "幾段" remains, missing measure-word feel), don't delete.
 
 ## Detection logic
 
@@ -184,14 +184,14 @@ if (word[i].text.startsWith(prefix) && word[i+n].text.startsWith(prefix)) {
 }
 
 // Method 2: windowed scan — find repeated start words in an 8–12 word window
-// "五年之...这五年间" → "五年" twice, the earlier is incomplete → delete
-// "你的对...你对世界的" → "你" twice, the earlier is incomplete → delete
-// "是一个底层，...是一个底层 boss" → "是一个底层" twice, the later is more complete → delete the earlier
+// "五年之...這五年間" → "五年" twice, the earlier is incomplete → delete
+// "你的對...你對世界的" → "你" twice, the earlier is incomplete → delete
+// "是一個底層，...是一個底層 boss" → "是一個底層" twice, the later is more complete → delete the earlier
 // Key: the later version is more complete / fluent
 
 // Method 3: particle-end detection — mid-sentence tone particle followed by similar content
-// "上一期呢在上一期的..." → "上一期" twice, first ends in "呢" → likely false start
-// "关于继续我们继续讲关于..." → "关于/继续" twice → false start
+// "上一集呢在上一集的..." → "上一集" twice, first ends in "呢" → likely false start
+// "關於繼續我們繼續講關於..." → "關於/繼續" twice → false start
 ```
 
 **Difficulty**: this kind of restatement doesn't always have a common prefix — it's "said a few words, realized it was wrong, paused, restarted with new phrasing". Needs LLM semantic understanding to identify which part is the abandoned half.
@@ -211,31 +211,31 @@ if (word[i].text.startsWith(prefix) && word[i+n].text.startsWith(prefix)) {
 | Source | Wrong delete | Result | Problem |
 | --- | --- | --- | --- |
 | 就是就是努力。 | "就是就是努力。" | whole sentence gone | "努力" is the key meaning |
-| 但最后最后其实我也没当上 | "但最后" | loses "但" connector | "但" carries meaning |
-| 怎么能能能能能做到，对吧？ | whole sentence | gone | content lost entirely |
-| 所以我觉得啊，我的第二个关键词可能就是就是就是探索。 | whole sentence | gone | key info "second keyword is 探索" lost |
+| 但最後最後其實我也沒錄取 | "但最後" | loses "但" connector | "但" carries meaning |
+| 怎麼能能能能能做到，對吧？ | whole sentence | gone | content lost entirely |
+| 所以我覺得啊，我的第二個關鍵詞可能就是就是就是探索。 | whole sentence | gone | key info "second keyword is 探索" lost |
 
 ### ✅ Right approach
 
 | Source | Right delete | Keep |
 | --- | --- | --- |
 | 就是就是努力。 | "就是" | "就是努力。" |
-| 但最后最后其实我也没当上 | "最后" (one repeat) | "但最后其实我也没当上" |
-| 怎么能能能能能做到，对吧？ | "能能能能" | "怎么能做到，对吧？" |
-| 所以我觉得啊...就是就是就是探索。 | "就是就是" | "...就是探索。" |
+| 但最後最後其實我也沒錄取 | "最後" (one repeat) | "但最後其實我也沒錄取" |
+| 怎麼能能能能能做到，對吧？ | "能能能能" | "怎麼能做到，對吧？" |
+| 所以我覺得啊...就是就是就是探索。 | "就是就是" | "...就是探索。" |
 
 ### Three iron rules
 
-1. **Keep semantic connectors**: 但 / 所以 / 然后 / 因为 etc. carry meaning, never delete even when surrounded by stutters.
+1. **Keep semantic connectors**: 但 / 所以 / 然後 / 因為 etc. carry meaning, never delete even when surrounded by stutters.
 2. **Keep the final complete expression**: after N stutters, the last one is the correct version — must keep.
 3. **Split complex sentences**: when a sentence has multiple stutter points, split into multiple independent edits, one per stutter.
 
 ### Complex-sentence split example
 
-Source: `对，然后但最后最后其实我也没当上产品经理啊，这是一个但这但这个是有原因的了。`
+Source: `對，然後但最後最後其實我也沒錄取產品經理啊，這是一個但這但這個是有原因的了。`
 
 Split into two independent edits:
-- Edit 1: delete "最后" (the "最后最后" stutter, only one repeat)
-- Edit 2: delete "这是一个但这" (keep "但这个是有原因的了")
+- Edit 1: delete "最後" (the "最後最後" stutter, only one repeat)
+- Edit 2: delete "這是一個但這" (keep "但這個是有原因的了")
 
-Result: `对，然后但最后其实我也没当上产品经理啊，但这个是有原因的了。`
+Result: `對，然後但最後其實我也沒錄取產品經理啊，但這個是有原因的了。`

@@ -42,11 +42,11 @@ residual (whole) + [silence] + complete sentence
 
 | Residual | What follows | Delete range |
 | --- | --- | --- |
-| "他呢" | [silence] + "这是我剪出来的..." | "他呢" whole sentence |
-| "为什么做这个东西呢一" | [silence] + "做这个东西的原因是" | **whole sentence** (not just "呢一") |
-| "分本区别就是剪映它虽然" | [silence 3 s] + "眼影它是没有学习能力的" | whole sentence + silence |
-| "我们先打具体怎么做呢" | "首先" | whole sentence |
-| "打开我们的AI" | [silence] + "打开我们的AI然后..." | whole sentence (the earlier incomplete version) |
+| "他呢" | [silence] + "這是我剪出來的..." | "他呢" whole sentence |
+| "為什麼做這個東西呢一" | [silence] + "做這個東西的原因是" | **whole sentence** (not just "呢一") |
+| "分本區別就是剪映它雖然" | [silence 3 s] + "眼影它是沒有學習能力的" | whole sentence + silence |
+| "我們先具體怎麼做呢" | "首先" | whole sentence |
+| "打開我們的AI" | [silence] + "打開我們的AI然後..." | whole sentence (the earlier incomplete version) |
 
 ## Heuristics
 
@@ -70,7 +70,7 @@ residual (whole) + [silence] + complete sentence
 
 ```
 ❌ Only delete "呢一" (the odd ending)
-✓ Delete "为什么做这个东西呢一" (the whole residual)
+✓ Delete "為什麼做這個東西呢一" (the whole residual)
 ```
 
 **Remember**: a residual's problem isn't the ending — it's that the whole sentence wasn't completed. Delete the whole thing.

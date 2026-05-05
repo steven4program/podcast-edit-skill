@@ -1,21 +1,21 @@
 ---
 name: podcast-edit:cut
-description: Podcast audio transcription and AI semantic analysis. Backed by Aliyun FunASR, produces an enhanced review UI and an automatic cut. Triggers — cut podcast, edit podcast, edit audio, 剪播客, 處理播客.
+description: Podcast audio transcription and AI semantic analysis. Uses local Whisper by default, produces an enhanced review UI and an automatic cut. Triggers — cut podcast, edit podcast, edit audio, 剪 Podcast, 處理 Podcast.
 ---
 
 <!--
 input: audio file (*.mp3, *.wav, *.m4a) + speaker info
 output: subtitles_words.json, semantic_deep_analysis.json, review_enhanced.html (dynamic player), final mp3
-pos: Aliyun transcription + AI deep understanding + enhanced review + auto cut
+pos: local Whisper transcription + AI deep understanding + enhanced review + auto cut
 
 Architecture guardian: when this file is modified, also update:
 1. ../README.md skill table
 2. /CLAUDE.md routing table
 -->
 
-# Cut (剪播客) v6
+# Cut (剪 Podcast) v6
 
-> Aliyun FunASR transcription + Claude semantic analysis + enhanced web review + auto cut + per-user preference learning.
+> Local Whisper transcription + Claude semantic analysis + enhanced web review + auto cut + per-user preference learning.
 
 ## Quick start
 
@@ -27,13 +27,13 @@ User: cut this recording, speakers: host, guest
 
 **Required inputs**:
 1. Audio file path
-2. **Speaker count** (2, 3, …) — **must come from the user; do NOT guess**
-3. Speaker names
+2. Speaker label for the MVP local Whisper path (defaults to `Speaker 0`)
+3. Speaker count and speaker names only if using Aliyun fallback or future diarization
 
 **⚠️ Pre-flight checks**:
-- If the user hasn't given the speaker count, **ask**.
-- Do not infer or guess the count.
-- Wrong speaker count tanks accuracy from 98.8 % to unusable.
+- Default to local Whisper unless the user explicitly asks for Aliyun/FunASR.
+- Tell the user that local Whisper MVP assigns all words to one speaker.
+- If using Aliyun fallback, ask for speaker count; do not infer or guess it.
 
 **🚫 CRITICAL: never regenerate `review_enhanced.html` over a user-reviewed file!**
 - Manual edits live in the page's JS / localStorage state. Regenerating wipes them.
@@ -50,6 +50,9 @@ output/
         │   ├── audio.mp3                       # source (transcription input)
         │   ├── audio_seekable.mp3              # CBR re-encode (review page; precise seek)
         │   ├── audio_url.txt                   # uploaded URL
+        │   ├── whisper_transcription.json      # local Whisper output (default path)
+        │   ├── whisper_<speaker>.json          # per-track Whisper output (multitrack path)
+        │   ├── whisper_multitrack_manifest.json
         │   ├── aliyun_funasr_transcription.json
         │   ├── speaker_mapping.json
         │   └── subtitles_words.json            # word-level (SOURCE OF TRUTH)
@@ -227,7 +230,7 @@ mkdir -p "$BASE_DIR/1_transcript" "$BASE_DIR/2_analysis" "$BASE_DIR/3_output"
 AUDIO_EXT="${AUDIO_PATH##*.}"
 cp "$AUDIO_PATH" "$BASE_DIR/1_transcript/audio_original.$AUDIO_EXT"
 
-# 2) Downsample to 16 kHz mono MP3 (FunASR likes low sample rates)
+# 2) Downsample to 16 kHz mono MP3 (transcription input)
 ffmpeg -i "file:$AUDIO_PATH" -vn -acodec libmp3lame -ar 16000 -ac 1 -y "$BASE_DIR/1_transcript/audio.mp3"
 
 # 3) ⚠️ MANDATORY: re-encode as CBR MP3 for the review page (precise seek)
@@ -244,7 +247,7 @@ echo "   audio_seekable.mp3         (review page, CBR)"
 
 > **The review page MUST use `audio_seekable.mp3`**. In Step 6, pass `--audio 1_transcript/audio_seekable.mp3` to the HTML generator.
 
-##### Upload to get a public URL
+##### Optional upload to get a public URL
 
 ```bash
 # Upload to uguu.se (24 h retention)
@@ -261,48 +264,57 @@ Notes:
 - uguu.se files self-delete after 24h.
 - For longer retention, use Aliyun OSS or another cloud store.
 - The URL must be publicly reachable.
+- Skip this step for the default local Whisper path.
 
 ##### Transcribe + speaker mapping → `subtitles_words.json`
 
-This step covers: API transcribe → identify speakers → produce word-level transcript.
+Default path: local Whisper transcribe → produce word-level transcript. The MVP assigns all words to one speaker so the existing cut/review pipeline can run without Aliyun.
 
 ```bash
-SPEAKER_COUNT=3  # ⚠️ MUST come from the user (2, 3, …)
-
-# 3a. Call Aliyun (~3 min)
-# API key auto-loads from .env; no manual export needed.
-cd "$BASE_DIR/1_transcript"
-bash "$SKILL_DIR/cut/scripts/aliyun_funasr_transcribe.sh" "$AUDIO_URL" "$SPEAKER_COUNT"
-# → aliyun_funasr_transcription.json
-
-# 3b. Identify speakers (look at first 20 sentences)
-node "$SKILL_DIR/cut/scripts/identify_speakers.js" "$BASE_DIR/1_transcript/aliyun_funasr_transcription.json"
-# Sample output:
-# 1. [Speaker 0] 0.2s - I'm the host Alice
-# 2. [Speaker 1] 29.4s - Hello everyone, I'm Bob
-
-# 3c. Build the mapping
-cat > "$BASE_DIR/1_transcript/speaker_mapping.json" << 'EOF'
-{
-  "0": "Alice",
-  "1": "Bob"
-}
-EOF
-
-# 3d. Generate the word-level transcript (the canonical output)
-cd "$BASE_DIR/1_transcript"
-node "$SKILL_DIR/cut/scripts/generate_subtitles_from_aliyun.js" \
-  aliyun_funasr_transcription.json \
-  speaker_mapping.json
+python3 "$SKILL_DIR/cut/scripts/transcribe_whisper_local.py" \
+  "$BASE_DIR/1_transcript/audio.mp3" \
+  --output-dir "$BASE_DIR/1_transcript" \
+  --model large-v3 \
+  --language zh \
+  --speaker "Speaker 0"
 # → subtitles_words.json ⭐ THE source of truth
 
 echo "✅ Step 3 done: subtitles_words.json generated"
 ```
 
 Key points:
-- `SPEAKER_COUNT` must be correct (98.8 % accuracy depends on it)
-- `identify_speakers.js` is a quick aid for figuring out who's who
-- `subtitles_words.json` is the foundation for everything downstream
+- `subtitles_words.json` is the foundation for everything downstream.
+- Local Whisper MVP does not diarize; all words use the provided `--speaker` label.
+- Use `--language zh` for Chinese/Taiwanese Mandarin audio, or omit it for auto-detect.
+
+Multitrack path: if each speaker has a separate, time-aligned audio file, use track labels instead of diarization:
+
+```bash
+python3 "$SKILL_DIR/cut/scripts/transcribe_whisper_multitrack.py" \
+  --track "Alice=/path/to/alice.wav" \
+  --track "Bob=/path/to/bob.wav" \
+  --output-dir "$BASE_DIR/1_transcript" \
+  --model large-v3 \
+  --language zh
+# → whisper_Alice.json, whisper_Bob.json, subtitles_words.json
+```
+
+Key points:
+- Track files must share the same zero timestamp. If Bob starts 0.25 s late, pass `--offset "Bob=0.25"`.
+- Each track is treated as one speaker; this is more reliable than diarization when isolated tracks are available.
+- The review page still uses the mixed/seekable `audio_seekable.mp3`; multitrack input is only for transcription and speaker labels.
+
+Optional Aliyun fallback:
+
+```bash
+SPEAKER_COUNT=3  # must come from the user
+cd "$BASE_DIR/1_transcript"
+bash "$SKILL_DIR/cut/scripts/aliyun_funasr_transcribe.sh" "$AUDIO_URL" "$SPEAKER_COUNT"
+node "$SKILL_DIR/cut/scripts/identify_speakers.js" "$BASE_DIR/1_transcript/aliyun_funasr_transcription.json"
+node "$SKILL_DIR/cut/scripts/generate_subtitles_from_aliyun.js" \
+  aliyun_funasr_transcription.json \
+  speaker_mapping.json
+```
 
 ##### Sentence split (`sentences.txt`)
 
@@ -318,9 +330,9 @@ node "$SKILL_DIR/cut/scripts/generate_sentences.js" "$BASE_DIR/1_transcript/subt
 
 Sample:
 ```
-0|0-429|Alice|哈喽大家好欢迎来到今天的五点一刻...
-1|431-607|Bob|啊对的嗯啊对现在已经26年了...
-2|609-612|Bob|啊对的嗯。
+0|0-429|Alice|哈囉大家好歡迎來到今天的...
+1|431-607|Bob|啊對的嗯啊對現在已经26年了...
+2|609-612|Bob|啊對的嗯。
 ```
 
 ---
@@ -428,12 +440,12 @@ Final rules = base rules (editing-rules/) + user overrides (editing_rules/)
 
 | Priority | Type | Rule file | Layer | Notes |
 | --- | --- | --- | --- | --- |
-| 0 | Leading filler | 2-filler-detection | rules ✅ | "嗯，"/"对，"/"啊，" 100 % recall |
+| 0 | Leading filler | 2-filler-detection | rules ✅ | "嗯，"/"對，"/"啊，" 100 % recall |
 | 1 | Long silence | 3-silence-handling | rules ✅ | >0.8 s cap, >2 s suggest delete |
 | 2 | Stutter | 5-stutter | rules ✅ | consecutive same word + suffix-match + in-sentence filler |
 | 3 | In-sentence repeat | 6-in-sentence-repetition | rules ✅ | phrase-level "可以去可以去" |
 | 4 | Consecutive filler | 7-consecutive-filler | rules ✅ | "嗯啊", "呃啊" |
-| 5 | Restart signal | 8-self-correction | rules ✅ | "等一下"/"重来" + repetition |
+| 5 | Restart signal | 8-self-correction | rules ✅ | "等一下"/"重來" + repetition |
 | 6 | Self-correction | 8-self-correction | **LLM ★** | said-then-corrected, 11 sub-patterns (highest LLM-only value) |
 | 7 | Residual sentence | 9-residual-sentence | LLM | half-sentence interrupted, delete the whole thing |
 | 8 | Repeated sentence | 4-repeated-sentence | LLM | adjacent sentences share ≥5 chars at start; delete the shorter |
@@ -451,12 +463,12 @@ Step 5b = rule layer (high recall) → LLM layer (semantic + rule review) → me
 Rule layer (run_fine_analysis.js → fine_analysis_rules.json):
   - leading filler (filler_start) — 100 % recall ✅
   - silence detection — needs audio timestamps
-  - consecutive same-word stutter — "我我", "这个这个"
-  - suffix-match stutter — "在这个"+"这个"
-  - in-sentence isolated filler — 啊/呃/额/对/哦
+  - consecutive same-word stutter — "我我", "這個這個"
+  - suffix-match stutter — "在這個"+"這個"
+  - in-sentence isolated filler — 啊/呃/額/對/哦
   - phrase-level in-sentence repeat — "可以去可以去"
   - consecutive filler — "嗯啊", "呃啊"
-  - restart signal — "等一下"/"重来" + repetition
+  - restart signal — "等一下"/"重來" + repetition
   ⚠️ Some edits flagged needsReview=true → LLM layer reviews
 
 LLM layer (Claude → fine_analysis_llm.json):
@@ -499,8 +511,8 @@ Merge (merge_llm_fine.js → fine_analysis.json):
 {
   "batch_range": [0, 59],
   "edits": [
-    {"s": 27, "text": "嗯，", "type": "filler_start", "reason": "leading filler 嗯", "beforeText": "嗯，我觉得挺重要的。", "afterText": "我觉得挺重要的。"},
-    {"s": 96, "text": "我，因为我，", "type": "self_correction", "reason": "self-correction: half-restart", "beforeText": "我，因为我，infj是内向的。", "afterText": "infj是内向的。"}
+    {"s": 27, "text": "嗯，", "type": "filler_start", "reason": "leading filler 嗯", "beforeText": "嗯，我覺得很重要的。", "afterText": "我覺得很重要的。"},
+    {"s": 96, "text": "我，因為我，", "type": "self_correction", "reason": "self-correction: half-restart", "beforeText": "我，因為我，infj是内向的。", "afterText": "infj是内向的。"}
   ],
   "scan_summary": {"total_sentences": 60, "sentences_with_edits": 8}
 }
@@ -596,7 +608,7 @@ Merge (merge_llm_fine.js → fine_analysis.json):
 - Pay special attention to types with the highest miss rate historically:
   1. self_correction (50 % miss rate): same-prefix expansion, stumble-restart, particle-end false start
   2. stutter (29 %): single-char pronoun repeats (我我/他他/它它), extreme repeats (≥3×)
-  3. consecutive_filler: continuous "这个这个这个"
+  3. consecutive_filler: continuous "這個這個這個"
   4. production_talk: opening transitions, recording-time interactions
 - Batch: 50–80 sentences (matches 5b).
 
@@ -1136,29 +1148,25 @@ node -e "
 
 ## Configuration
 
-### Aliyun API key
+### Local Whisper
 
 ```bash
-# Method 1: env var
-export DASHSCOPE_API_KEY="sk-your-api-key"
-
-# Method 2: .env
-cd "$SKILL_DIR"
-cat >> .env << 'EOF'
-DASHSCOPE_API_KEY=sk-your-api-key
-EOF
+pip install -r cut/scripts/requirements.txt
 ```
 
-**Get a key**:
-1. Visit https://dashscope.console.aliyun.com/
-2. Activate "Model Service Lingji"
-3. Create an API key
+Default transcription is local and does not require an API key. It writes `whisper_transcription.json` and `subtitles_words.json` under `1_transcript/`.
 
-**Pricing**:
-- Charged by audio length
-- ~¥X / hour (check Aliyun for the latest rate)
+### Aliyun API key (optional fallback)
 
-### Speaker count
+Use this only if the user asks for Aliyun/FunASR diarization.
+
+```bash
+export DASHSCOPE_API_KEY="sk-your-api-key"
+```
+
+Or place it in `$SKILL_DIR/.env` as `DASHSCOPE_API_KEY=...`.
+
+### Speaker count (Aliyun fallback only)
 
 **How to determine**:
 1. Listen to the first 2–3 minutes
@@ -1186,7 +1194,7 @@ EOF
       {
         "sentence_id": 1,
         "speaker_id": 0,
-        "text": "嗯，哈喽，大家好，我是主播麦雅。",
+        "text": "嗯，哈囉，大家好，我是主播麥雅。",
         "begin_time": 69400,
         "end_time": 74800,
         "words": [
@@ -1248,28 +1256,28 @@ Differences from short-form / video voice-over:
 
 ## FAQ
 
-### Q1: Aliyun API vs local FunASR — which?
+### Q1: local Whisper vs Aliyun fallback — which?
 
-**Recommend Aliyun API**:
-- ✅ 7× faster (3 min vs 20 min)
-- ✅ Speaker recognition (98.8 %)
-- ✅ No local install needed
-- ✅ Good for occasional use or when you need speed
+**Recommend local Whisper by default**:
+- Free after install
+- Data stays local
+- No upload URL or transcription API key required
+- Produces `subtitles_words.json` directly for the existing pipeline
 
-**Choose local FunASR**:
-- ✅ Free
-- ✅ Data privacy (stays local)
-- ✅ Good for heavy / frequent use
-- ✅ Slightly higher accuracy (99 %+)
+**Choose Aliyun fallback**:
+- You need API speaker diarization now
+- You already have DashScope configured
+- You are comfortable uploading audio to a public or signed URL
 
 ### Q2: speaker recognition isn't accurate
 
 **Check**:
-1. Is `SPEAKER_COUNT` correct?
-2. Is the audio clean?
-3. Are speaker voices distinguishable?
+1. Are you using local Whisper MVP? It intentionally assigns one speaker label.
+2. If you have isolated tracks, use `transcribe_whisper_multitrack.py` instead of diarization.
+3. If using Aliyun fallback, is `SPEAKER_COUNT` correct?
+4. Is the audio clean and are speaker voices distinguishable?
 
-**Still bad**: use local FunASR (slightly higher accuracy), or hand-correct (usually <2 % difference; small workload).
+**Still bad**: hand-correct speakers in the review UI, or add a WhisperX/pyannote diarization pass.
 
 ### Q3: uguu.se URL expires after 24 h
 
@@ -1295,7 +1303,8 @@ done
 
 ### Q5: cost estimate
 
-- Aliyun FunASR API: charged by audio length, ~¥X / hour. A 2-hour podcast costs ~¥X.
+- Local Whisper: no API charge; runtime depends on model size and machine speed.
+- Aliyun FunASR fallback: charged by audio length.
 - uguu.se: free, <100 MB, 24-hour auto-delete.
 
 ---
@@ -1365,7 +1374,7 @@ if (gap < 0.02) {
 }
 ```
 
-Real case: sentence 143 "方面的" ends 992.59, "困扰" (delete) starts 992.59 (gap=0). Nudged back to `[992.49, …]` to prevent the "困" onset leaking.
+Real case: sentence 143 "方面的" ends 992.59, "困擾" (delete) starts 992.59 (gap=0). Nudged back to `[992.49, …]` to prevent the "困" onset leaking.
 
 **6c. mute → seek → fast-restore**:
 ```javascript
@@ -1424,7 +1433,7 @@ ffmpeg -v quiet -ss 10 -i source.wav -t 7 \
 
 ### Pitfall 11: cut_audio.py must use a WAV intermediate
 
-MP3 `-c copy` cuts are only frame-accurate (~26 ms) → first kept word's onset is eaten or the previous deleted word's tail leaks (e.g. "对", "放").
+MP3 `-c copy` cuts are only frame-accurate (~26 ms) → first kept word's onset is eaten or the previous deleted word's tail leaks (e.g. "對", "放").
 
 **Fix (v2)**: decode to WAV → cut from WAV (sample-accurate) → concat → encode back to MP3. ~647 MB temp WAV for a 2-hour podcast; cleaned automatically.
 
@@ -1470,7 +1479,7 @@ const charOffset = (preFrag.textContent || '').length;
 
 ### Pitfall 16: browser-preview judder ≠ final-output problem
 
-**Symptom**: in cut-mode review playback, 0 ms-gap connected words ("这个球"→"所以", "但其实困住我们的") sound clipped at delete boundaries.
+**Symptom**: in cut-mode review playback, 0 ms-gap connected words ("這個球"→"所以", "但其實困住我们的") sound clipped at delete boundaries.
 
 **Cause**: the browser's `<audio>` seek precision is ~26 ms (MP3 frame boundary) plus decoder settling time. Connected words with 0 ms gap can't be cleanly cut.
 
@@ -1548,7 +1557,7 @@ const charOffset = (preFrag.textContent || '').length;
 
 ### Pitfall 28: ASR onset pullback must cover all gap sizes
 
-**Problem**: review_enhanced.html's `exportDeleteSegments()` only did onset pullback for `gap < 300 ms` (back 50 ms); `gap ≥ 300 ms` got no pullback. Result: S13's "对" (gap 470 ms), S14's "嗯" (gap 280 ms) had residual onset after delete.
+**Problem**: review_enhanced.html's `exportDeleteSegments()` only did onset pullback for `gap < 300 ms` (back 50 ms); `gap ≥ 300 ms` got no pullback. Result: S13's "對" (gap 470 ms), S14's "嗯" (gap 280 ms) had residual onset after delete.
 
 **Cause**: ASR word-start timestamps lag real onset by 30–90 ms regardless of gap size.
 
@@ -1620,7 +1629,7 @@ Fixed in both `getSkipRanges()` and `exportDeleteSegments()`. **Fixed.**
 
 ### Pitfall 34: ASR merged-word delete out-of-bounds (S188 bug)
 
-**Symptom**: user wanted to delete "就是要" (keep "就是一口答应" after); the final eats "就是" too.
+**Symptom**: user wanted to delete "就是要" (keep "就是一口答應" after); the final eats "就是" too.
 
 **Root**: FunASR merged "就是要就是" into a single ASR word (time range 690.69–692.53 s). `mapTextToTimestamps()` mapping the delete text "就是要" took the whole word's `end=692.53` — should be at the 3/5 mark (~691.79 s).
 
@@ -1682,11 +1691,11 @@ Fixed in `merge_llm_fine.js` (filler pre-onset extension). **Fixed.**
 
 ### Pitfall 40: large-block delete onset can push past the start kept word
 
-**Symptom**: onset direction=right pushes the start of a long delete into a kept word, truncating it (e.g. "然后" leaves only "然").
+**Symptom**: onset direction=right pushes the start of a long delete into a kept word, truncating it (e.g. "然後" leaves only "然").
 
-**Root**: a long delete (e.g. 200 s) may have a short weak kept word right at its start (e.g. "然后", 280 ms). Onset search direction=right finds a valley inside that kept word, pushing past it.
+**Root**: a long delete (e.g. 200 s) may have a short weak kept word right at its start (e.g. "然後", 280 ms). Onset search direction=right finds a valley inside that kept word, pushing past it.
 
-**Case**: sentence 223 Seg 34 `[921.59, 1122.19]`; onset pushed start to 921.73, crossing "然后" (921.64–921.92), leaking "然".
+**Case**: sentence 223 Seg 34 `[921.59, 1122.19]`; onset pushed start to 921.73, crossing "然後" (921.64–921.92), leaking "然".
 
 **Rule**: when onset-detecting on user-exported segments, watch for short kept words before delete starts. If a kept word is < 300 ms and the refined onset crosses it, clamp or skip.
 
@@ -1704,6 +1713,25 @@ Fixed in `merge_llm_fine.js` (filler pre-onset extension). **Fixed.**
 - All cuts MUST use `audio_original.*`, not `audio.mp3`.
 
 `waveform_trim.py` (waveform calibration) and `cut_audio.py` (source selection) are involved.
+
+### Pitfall 42: in_sentence_repeat false positive + silence_merged orphan
+
+**Symptom**: a single sentence with parallel clauses (e.g. `"然後Codex也會用然後CodePalette也會用"`) gets nearly the entire sentence marked for deletion. The user toggles the fine-cut tag in `review_enhanced.html` to restore it, but on playback the same span is still skipped — un-toggling has no audible effect.
+
+**Root** (two compounding bugs):
+
+1. **`run_fine_analysis.js` rule 4 word-mapping bug** — the deleteWordStart loop used `wOrigStart <= deleteOrigStart && deleteWordStart < 0`, which always matched word 0 (whose origStart = 0 ≤ anything). Result: every phrase-repeat delete started from the sentence's first word, regardless of where the actual repeat began. Combined with conjunction-prefix phrases like `"然後Code"` matching twice between unrelated parallel clauses, the rule emitted multi-second deletes that wiped most of the kept content.
+2. **`merge_llm_fine.js` silence_merged emitted without `dependsOn`** — silence_merged is computed from gaps between kept words AFTER all delete edits are merged. The template (`templates/review_enhanced.html`) suppresses silence_merged when its `dependsOn` edits are all disabled, but the merge step never populated `dependsOn`. Its fallback ("entirely contained in a disabled content edit") never fires because silence_merged starts at `prevKeptWord.end + 0.8s`, which is typically before the content edit's deleteStart.
+
+**Fix** (already in code):
+
+- `run_fine_analysis.js`:
+  - Replace word-mapping with `if (deleteWordStart < 0 && wOrigEnd > deleteOrigStart) deleteWordStart = wi;` — the first word whose end exceeds the delete-start char.
+  - Add a `CONJUNCTION_PREFIXES` hard-filter (`然後 所以 但是 可是 不過 就是 因為 而且 或是 或者 還有`) — phrases starting with these are parallel-clause markers, not stutter.
+  - Add a length sanity guard: drop the edit if `deleteText` cleaned of punctuation is more than `phraseLen + gap + 4` chars.
+- `merge_llm_fine.js`: when emitting silence_merged, store refs to the content edits whose deletions span the underlying gap, then resolve to final `idx` values after the post-sort reindex. Strip the temp `_dependsOnRefs` field. The HTML generator already passes `dependsOn` through to the front-end (`generate_review_enhanced.js` line 227-230).
+
+**Detection methodology** for this rule lives in `cut/editing-rules/6-in-sentence-repetition.md`; keep the rule's hard-filter list and length guard in sync there.
 
 ---
 
@@ -1791,4 +1819,4 @@ generate_review_enhanced.js / cut_audio.py
 
 ---
 
-**Recommended workflow**: Aliyun API transcribe + Claude analyze + enhanced review + one-shot cut ✨
+**Recommended workflow**: local Whisper transcribe + Claude analyze + enhanced review + one-shot cut

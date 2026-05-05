@@ -16,12 +16,12 @@ Architecture guardian: when this file is modified, also update:
 
 The rule layer (`run_fine_analysis.js`) now covers these deterministic types:
 - ✅ Sentence-leading filler (`filler_start`) — 100 % recall, 100 % boundary
-- ✅ Consecutive same-word stutter — 我我, 这个这个
-- ✅ Suffix-match stutter — 在这个 + 这个
-- ✅ In-sentence isolated filler — 啊/呃/额/对/哦
+- ✅ Consecutive same-word stutter — 我我, 這個這個
+- ✅ Suffix-match stutter — 在這個 + 這個
+- ✅ In-sentence isolated filler — 啊/呃/額/對/哦
 - ✅ Phrase-level in-sentence repetition — 可以去可以去
 - ✅ Consecutive filler — 嗯啊, 呃啊
-- ✅ Restart signal — 等一下/重来 + repetition
+- ✅ Restart signal — 等一下/重來 + repetition
 - ✅ Silence detection
 
 **LLM-layer core responsibilities (eval-data driven)**:
@@ -92,35 +92,35 @@ mandatory for every edit.
 
 1️⃣ Self-correction (★ HIGHEST PRIORITY — 39 % of two-layer common misses; LLM-unique value)
    11 sub-patterns:
-   a. Partial repetition: "你再关你关掉" → delete "你再关"
+   a. Partial repetition: "你再關你關掉" → delete "你再關"
    b. Negation correction: "它是它不是" → delete "它是"
       e.g. "我是我不是啦" (oral negation correction; delete "我是")
    c. Word interrupted: half a word + complete restatement
-   d. Mid-sentence half-restart: "五年之这五年间" → delete "五年之"
-      e.g. "我在我就说" → delete "我在", keep "我就说"
-      e.g. "有一个有一种感觉" → delete "有一个", keep "有一种感觉"
-   e. Reference correction: "你的对你对世界的" → delete "你的对"
+   d. Mid-sentence half-restart: "五年之這五年間" → delete "五年之"
+      e.g. "我在我就説" → delete "我在", keep "我就説"
+      e.g. "有一個有一種感覺" → delete "有一個", keep "有一種感覺"
+   e. Reference correction: "你的對你對世界的" → delete "你的對"
    f. Particle-end false start: tone particle (呢/啊/吧) appears mid-sentence followed by
       similar content → delete up to the particle
-      e.g. "上一期呢在上一期的超越百岁里边" → delete "上一期呢"
+      e.g. "上一集呢在上一集的超越百歲裡面" → delete "上一集呢"
    g. Same-prefix expansion: same prefix appears twice, the second is more complete →
       delete the first
-      e.g. "中枢神经系统好像中枢神经系统没办法去调控" → delete "中枢神经系统好像"
-      e.g. "关于继续我们继续讲关于这个..." → delete "关于继续"
-      e.g. "在人身上在人身上电..." → delete the first "在人身上"
+      e.g. "中樞神經系统好像中樞神經系统沒辦法去調控" → delete "中樞神經系统好像"
+      e.g. "關於繼續我們繼續講關於繼續..." → delete "關於繼續"
+      e.g. "在人身上在人身上電..." → delete the first "在人身上"
    h. Synonymous restatement: same meaning, different wording, said twice → delete the
       incomplete one
-      e.g. "这个这么也就是说" → delete "这个这么", keep "也就是说"
+      e.g. "這個這麼也就是説" → delete "這個這麼", keep "也就是説"
    i. Stumble-restart: speaker stuck mid-way and restarts with different wording
-      e.g. "睡了一睡睡觉一晚上" → delete "睡了一睡" ("睡觉一晚上" is the complete restart)
-      e.g. "但其实更重要，但其实呃应该是。" → delete "但其实呃应该是。" (residual)
+      e.g. "睡了一睡睡覺一晚上" → delete "睡了一睡" ("睡覺一晚上" is the complete restart)
+      e.g. "但其實更重要，但其實呃應該是。" → delete "但其實呃應該是。" (residual)
    j. Double modifier: same modifier tried repeatedly
-      e.g. "比较慢的一个比较慢速的一个反应" → delete "比较慢的一个"
-      e.g. "分不了分不了那么那么开" → keep only "分不了那么开"
+      e.g. "比較慢的一個比較慢的一個反應" → delete "比較慢的一個"
+      e.g. "分不了分不了那麼那麼開" → keep only "分不了那麼開"
    k. Short-distance word-order correction: adjacent words reordered, very close (1–3
       char interval)
-      e.g. "我们现在时代我们时代现在" → delete "我们现在时代", keep "我们时代现在"
-      e.g. "关键是所以什么的关键" → delete "所以什么的", keep "关键是关键"
+      e.g. "我們現在時代我們時代現在" → delete "我們現在時代", keep "我們時代現在"
+      e.g. "關鍵是所以什麼的關鍵" → delete "所以什麼的", keep "關鍵是關鍵"
 
    Self-check:
    - Is there a ≥2-char phrase repeated nearby? (signal of same-prefix expansion)
@@ -129,7 +129,7 @@ mandatory for every edit.
      stumble-restart)
    - After deleting the suspect, does the sentence read better?
    - ⚠️ Mid-sentence half-restart also covers "said it wrong, then reorganized":
-     e.g. "去裁了之被我困在这里" → delete "去裁了之被" (restart after a slip)
+     e.g. "去裁了之被我困在這里" → delete "去裁了之被" (restart after a slip)
 
 2️⃣ Residual sentence
    - Sentence is semantically/grammatically incomplete (missing object/predicate, or
@@ -138,7 +138,7 @@ mandatory for every edit.
    - Ends in 呢 / 吧 / 的 etc. but doesn't form a complete sentence
 
 3️⃣ Pure-filler sentence
-   - Whole sentence is 1–2 fillers/confirm-words (e.g. "嗯。", "啊对的嗯。", "对对对。")
+   - Whole sentence is 1–2 fillers/confirm-words (e.g. "嗯。", "啊對的嗯。", "對對對。")
    - No substance → delete whole, tag single_filler or residual_sentence
 
 4️⃣ Production talk
@@ -154,15 +154,15 @@ mandatory for every edit.
      unusual patterns:
      - non-standard stutter (e.g. ASR split "我我" across different words)
      - extreme repetition (≥3×, rule layer may miss due to word-boundary issues)
-     - compound-word boundary ("不不断" → delete only the first "不")
+     - compound-word boundary ("不不斷" → delete only the first "不")
 
 6️⃣ Post-delete fluency self-check (⚠️ mandatory per edit! last guard against bad markings)
    - For each edit, write afterText (the sentence after the deletion) and "read" it:
      a. Is it fluent? Subject-verb-object intact?
-     b. Did you mistakenly delete part of a compound word? ("不不断" → delete only the
-        first "不"; don't break "不断")
+     b. Did you mistakenly delete part of a compound word? ("不不斷" → delete only the
+        first "不"; don't break "不斷")
      c. For N repetitions, did you keep one? ("你你你" → keep one "你"; don't delete all)
-     d. Did the deletion break a semantic connector? ("是他不对" → don't delete "是" or
+     d. Did the deletion break a semantic connector? ("是他不對" → don't delete "是" or
         the sentence stops being fluent)
    - If afterText is not fluent → text boundary is wrong; adjust
    - The core value: a human proofreader naturally re-reads after deleting; without this
@@ -189,24 +189,24 @@ Sentences {start_idx}-{end_idx}, please check each:
       "text": "嗯，",
       "type": "filler_start",
       "reason": "leading filler 嗯",
-      "beforeText": "嗯，我觉得这个事情挺重要的。",
-      "afterText": "我觉得这个事情挺重要的。"
+      "beforeText": "嗯，我覺得這個事情很重要。",
+      "afterText": "我覺得這個事情很重要。"
     },
     {
       "s": 96,
-      "text": "我，因为我，",
+      "text": "我，因為我，",
       "type": "self_correction",
-      "reason": "self-correction: half-restart; 'infj是一个' is more complete",
-      "beforeText": "我，因为我，infj是一个很内向的性格。",
-      "afterText": "infj是一个很内向的性格。"
+      "reason": "self-correction: half-restart; 'infj是一個' is more complete",
+      "beforeText": "我，因為我，infj是一個很内向的性格。",
+      "afterText": "infj是一個很内向的性格。"
     },
     {
       "s": 165,
       "text": "不",
       "type": "stutter",
-      "reason": "stutter: in '不不断' the first '不' is the stutter; '不断' is a complete compound",
-      "beforeText": "他不不断地在学习新的东西。",
-      "afterText": "他不断地在学习新的东西。"
+      "reason": "stutter: in '不不斷' the first '不' is the stutter; '不斷' is a complete compound",
+      "beforeText": "他不不斷的在學習新的東西。",
+      "afterText": "他不斷的在學習新的東西。"
     },
     {
       "s": 103,
@@ -218,19 +218,19 @@ Sentences {start_idx}-{end_idx}, please check each:
     },
     {
       "s": 15,
-      "text": "对，",
+      "text": "對，",
       "type": "filler_start",
-      "reason": "leading filler 对",
-      "beforeText": "对，呃，我可以分享一下当时的经历。",
-      "afterText": "呃，我可以分享一下当时的经历。"
+      "reason": "leading filler 對",
+      "beforeText": "對，呃，我可以分享一下當時的經歷。",
+      "afterText": "呃，我可以分享一下當時的經歷。"
     },
     {
       "s": 15,
       "text": "呃，",
       "type": "stutter",
       "reason": "in-sentence filler 呃",
-      "beforeText": "对，呃，我可以分享一下当时的经历。",
-      "afterText": "对，我可以分享一下当时的经历。"
+      "beforeText": "對，呃，我可以分享一下當時的經歷。",
+      "afterText": "對，我可以分享一下當時的經歷。"
     }
   ],
   "scan_summary": {
@@ -277,7 +277,7 @@ Sentences {start_idx}-{end_idx}, please check each:
 ## Iron rules for delete boundaries
 
 1. **Delete the earlier, keep the later**: the second iteration is usually more complete.
-2. **Keep semantic connectors**: 但 / 所以 / 然后 / 因为 — never delete even when surrounded by stutters.
+2. **Keep semantic connectors**: 但 / 所以 / 然後 / 因為 — never delete even when surrounded by stutters.
 3. **Keep the final complete expression**: after N stutters, the last one is correct.
 4. **Split complex sentences**: a sentence with multiple stutter points → split into multiple independent edits.
 5. **Fine cut doesn't make content choices**: only delete slips / fillers / repetitions; don't delete content for being "verbose".
@@ -297,12 +297,12 @@ Sentences {start_idx}-{end_idx}, please check each:
 
 **Wrong (combined problems):**
 ```json
-{"s": 15, "text": "对，呃，", "type": "filler_start", "reason": "leading filler + stutter"}
+{"s": 15, "text": "對，呃，", "type": "filler_start", "reason": "leading filler + stutter"}
 ```
 
 **Right (one edit per problem):**
 ```json
-{"s": 15, "text": "对，", "type": "filler_start", "reason": "leading filler 对", "beforeText": "对，呃，我可以分享一下", "afterText": "呃，我可以分享一下"}
+{"s": 15, "text": "對，", "type": "filler_start", "reason": "leading filler 對", "beforeText": "對，呃，我可以分享一下", "afterText": "呃，我可以分享一下"}
 ```
 ```json
 {"s": 15, "text": "呃，", "type": "stutter", "reason": "in-sentence filler 呃", "beforeText": "呃，我可以分享一下", "afterText": "我可以分享一下"}
@@ -313,34 +313,34 @@ Sentences {start_idx}-{end_idx}, please check each:
 ### More split scenarios
 
 1. **Leading filler + stutter**:
-   Source: "嗯，我我觉得这个很重要"
+   Source: "嗯，我我覺得這個很重要"
    → edit1: text="嗯，" type=filler_start
    → edit2: text="我" type=stutter (first "我" is the stutter)
 
 2. **Multiple stutters**:
-   Source: "然后我我刚刚讲的这个这个这个东西"
+   Source: "然後我我剛剛講的這個這個這個東西"
    → edit1: text="我" type=stutter (pronoun stutter)
-   → edit2: text="这个这个" type=consecutive_filler (consecutive filler, keep last "这个")
+   → edit2: text="這個這個" type=consecutive_filler (consecutive filler, keep last "這個")
 
 3. **Leading filler + self-correction**:
-   Source: "对，我在我就说这个问题"
-   → edit1: text="对，" type=filler_start
+   Source: "對，我在我就説這個問題"
+   → edit1: text="對，" type=filler_start
    → edit2: text="我在" type=self_correction
 
 4. **Extreme repetition counts as one edit** (don't split):
-   Source: "一个一个一个一个特点"
-   → edit1: text="一个一个一个" type=stutter reason="extreme repetition; keep one"
+   Source: "一個一個一個一個特色"
+   → edit1: text="一個一個一個" type=stutter reason="extreme repetition; keep one"
    (this is the same problem with multiple repeats — one edit)
 
 ### When to split, when not to
 
 | Scenario | Split? | Why |
 | --- | --- | --- |
-| Leading "对，呃，" | ✅ split | "对" is a filler, "呃" is a stutter — two different problems |
-| "我我觉得" | ❌ don't split | single stutter; text="我" suffices |
-| "一个一个一个" | ❌ don't split | extreme repetition of one word — one problem |
-| "嗯，我在我就说" | ✅ split | "嗯" is filler, "我在" is self-correction |
-| "然后呢，就是就是说" | ✅ split | "然后呢，" might be filler, "就是" is stutter |
+| Leading "對，呃，" | ✅ split | "對" is a filler, "呃" is a stutter — two different problems |
+| "我我覺得" | ❌ don't split | single stutter; text="我" suffices |
+| "一個一個一個" | ❌ don't split | extreme repetition of one word — one problem |
+| "嗯，我在我就説" | ✅ split | "嗯" is filler, "我在" is self-correction |
+| "然後呢，就是就是説" | ✅ split | "然後呢，" might be filler, "就是" is stutter |
 | Whole-sentence delete | ❌ don't split | one edit per whole sentence; text="" |
 
 **Mnemonic**: different types → split; same problem of the same type → don't split.
@@ -352,78 +352,78 @@ Sentences {start_idx}-{end_idx}, please check each:
 ### Leading filler missed
 
 ```
-Source: 嗯，我觉得这个事情挺重要的。
+Source: 嗯，我覺得這個事情很重要的。
 Expect: delete "嗯，" → {"s": X, "text": "嗯，", "type": "filler_start"}
-Common miss: LLM understands "我觉得这个事情挺重要的" and ignores the leading "嗯，"
+Common miss: LLM understands "我覺得這個事情很重要的" and ignores the leading "嗯，"
 ```
 
 ### After-speaker-change leading filler missed (high-frequency miss)
 
 ```
-Context: S53 [Carol]: 嗯。 → S54 [Carol]: 对，谢谢青阳介绍一下你的学习和工作的经历。
-Expect: delete S54's "对，" → filler_start
-Common miss: LLM thinks "对" is a response to the previous sentence; in podcast fine-cut,
-leading "对，" before a long sentence is always deleted.
+Context: S53 [Carol]: 嗯。 → S54 [Carol]: 對，謝謝青陽介绍一下你的學習和工作的經歷。
+Expect: delete S54's "對，" → filler_start
+Common miss: LLM thinks "對" is a response to the previous sentence; in podcast fine-cut,
+leading "對，" before a long sentence is always deleted.
 
-Context: S56 [Carol]: 那你是从小就自己特别有主意... → S57 [Qingyang]: 嗯，呃，其实我觉得并没有。
-Expect: delete S57's "嗯，" → filler_start ("呃，" handled by consecutive_filler)
+Context: S56 [Carol]: 那你是從小就自己特别有鬼點子... → S57 [Qingyang]: 嗯，呃，其實我覺得並沒辦。
+調控pect: delete S57's "嗯，" → filler_start ("呃，" handled by consecutive_filler)
 Common miss: LLM treats "嗯" as a response to the question; in fine-cut, leading "嗯，"
 when answering should be deleted.
 
-Context: S57 [Qingyang]: ...并没有。 → S58 [Qingyang]: 对，其实我就是说...
-Expect: delete S58's "对，" → filler_start
-Common miss: same speaker's sequel sentence's "对，" is a self-affirming verbal tic, not
+Context: S57 [Qingyang]: ...並沒辦。 調控S58 [Qingyang]: 對，其實我就是説...
+Expect: delete S58's "對，" → filler_start
+Common miss: same speaker's sequel sentence's "對，" is a self-affirming verbal tic, not
 a real response.
 ```
 
 ### Self-correction missed (47.8 % of misses — the most prone to miss! Watch for short-distance corrections)
 
 ```
-Source: 上一期呢在上一期的超越百岁里边
-Expect: delete "上一期呢" → self_correction (particle-end false start)
-Common miss: LLM understands "在上一期的超越百岁里边" and skips the false start.
+Source: 上一集呢在上一集的超越百歲裡面
+Expect: delete "上一集呢" → self_correction (particle-end false start)
+Common miss: LLM understands "在上一集的超越百歲裡面" and skips the false start.
 
-Source: 可能这条路，这条路更适合我
-Expect: delete "可能这条路，" → self_correction / in_sentence_repeat
-Common miss: LLM reads two "这条路" as emphasis rather than slip.
+Source: 可能這條路，這條路更適合我
+Expect: delete "可能這條路，" → self_correction / in_sentence_repeat
+Common miss: LLM reads two "這條路" as emphasis rather than slip.
 
-Source: 中枢神经系统好像中枢神经系统没办法去呃对它进行一个强有力的调控吧。
-Expect: delete "中枢神经系统好像" → self_correction (same-prefix expansion)
+Source: 中樞神經系统好像中樞神經系统沒辦法去調控它進行一個強而有力的調控吧。
+Expect: delete "中樞神經系统好像" → self_correction (same-prefix expansion)
 Common miss: LLM sees the meaning is the same and skips the repetition.
 
-Source: 关于继续我们继续讲关于这个缺乏控制感这个事儿
-Expect: delete "关于继续" → self_correction (false start)
-Common miss: first 4 chars partially overlap with "我们继续讲关于" but aren't identical.
+Source: 關於繼續我們繼續講關於繼續缺乏控制感這個事情
+Expect: delete "關於繼續" → self_correction (false start)
+Common miss: first 4 chars partially overlap with "我們繼續講關於繼續but aren't identical.
 
-Source: 然后我们睡了一睡睡觉一晚上休息好了之后
+Source: 然後我們睡了一睡睡覺一個晚上休息完了之後
 Expect: delete "睡了一睡" → self_correction (stumble-restart)
-Common miss: "睡了一" looks like a normal opening; LLM doesn't notice "睡觉一晚上" is a restart.
+Common miss: "睡了一" looks like a normal opening; LLM doesn't notice "睡覺一個晚上" is a restart.
 
-Source: 在人身上在人身上电，不管是电刺激还是磁刺激
+Source: 在人身上在人身上電，不管是電刺激還是磁刺激
 Expect: delete the first "在人身上" → self_correction (exact repeat)
 Common miss: LLM sometimes treats exact repeats as not a slip.
 
 [Short-distance correction misses]
-Source: 我在我就说这个问题很重要
+Source: 我在我就説這個問題很重要
 Expect: delete "我在" → self_correction (half-restart)
-Common miss: only 2-char interval; LLM doesn't catch the "我在...我就说" correction relation.
+Common miss: only 2-char interval; LLM doesn't catch the "我在...我就説" correction relation.
 
-Source: 有一个有一种感觉这个东西不太对
-Expect: delete "有一个" → self_correction (half-restart)
-Common miss: "一个" and "一种" differ by one char — easy to overlook.
+Source: 有一個有一種感覺這個東西不太對
+Expect: delete "有一個" → self_correction (half-restart)
+Common miss: "一個" and "一種" differ by one char — easy to overlook.
 
-Source: 这么这样的话就能解决这个问题
-Expect: delete "这么" → self_correction (word-order correction)
+Source: 這麼這樣的話就能解決這個問題
+Expect: delete "這麼" → self_correction (word-order correction)
 Common miss: speaker uses different wording at close distance; LLM tends to read it as
 syntactic variation rather than slip.
 
-Source: 我是我不是个特别自律的人
+Source: 我是我不是一個很自律的人
 Expect: delete "我是" → self_correction (negation correction)
 Common miss: negation correction is common in speech but "我是" looks like a complete
 sentence start; LLM tends to skip it.
 
-Source: 我因为我是因为工作太忙了
-Expect: delete "我因为" → self_correction (cause restatement)
+Source: 我因為我是因為工作太忙了
+Expect: delete "我因為" → self_correction (cause restatement)
 Common miss: same meaning expressed in two ways at very close distance (2–3 char gap).
 ```
 
@@ -431,58 +431,58 @@ Common miss: same meaning expressed in two ways at very close distance (2–3 ch
 
 ```
 [Single-char pronoun repetition]
-Source: 然后我我刚刚讲的这个顺序呢
+Source: 然後我我剛剛講的這個順序呢
 Expect: delete the first "我" → stutter (single-char pronoun repeat)
 Common miss: rule layer only handles ≥2-char repeats; "我我" falls between rule and LLM.
 
 Source: 他他控制不了
 Expect: delete the first "他" → stutter
-Source: 它它最先导致产生的就是情绪
+Source: 它它最先導致產生的就是情绪
 Expect: delete the first "它" → stutter
-Source: 你你得好好听这句话
+Source: 你你要好好聽這句話
 Expect: delete the first "你" → stutter
 
 [In-sentence meaningless filler — high-frequency miss!]
-Source: 大脑啊它就像是一个雾
+Source: 大腦它就像是一團霧
 Expect: delete "啊" → stutter (in-sentence filler)
 Common miss: LLM reads "啊" as expressive prosody; in podcast fine-cut these are pure stutter.
 
-Source: 这个呃工作很辛苦
+Source: 這個呃工作很辛苦
 Expect: delete "呃" → stutter (in-sentence filler)
 Common miss: "呃" between words; LLM tends to keep as a tone particle.
 
-Source: 他唔在意这个细节
+Source: 他唔在意這個細節
 Expect: delete "唔" → stutter (in-sentence stutter)
 Common miss: non-standard stutter sound; LLM tends to keep as oral expression.
 
-Source: 每天啊就是重复的工作啊日常
+Source: 每天啊就是重複的工作啊日常
 Expect: delete the first "啊" (judge the second by position) → stutter
 Common miss: same character may have different roles in different positions; LLM must
 judge each.
 
-Source: 我们的想法呃就是这样的一个情况
+Source: 我們的想法呃就是這樣的一個情况
 Expect: delete "呃" → stutter (in-sentence filler)
 Common miss: stutter sounds embedded in linguistic context are often missed.
 
 [Extreme repetition]
-Source: 一个一个一个一个一个特点吧
+Source: 一個一個一個一個一個特色吧
 Expect: delete extras → stutter (extreme repetition)
-Keep:   "一个特点吧"
+Keep:   "一個特色吧"
 
-Source: 更、更、更、更不活跃、更压抑的
+Source: 更、更、更、更不活躍、更壓抑的
 Expect: delete the first 3 "更，" → stutter (extreme repetition)
-Keep:   "更不活跃、更压抑的"
+Keep:   "更不活躍、更壓抑的"
 
-Source: 这个这个这个交感神经系统
-Expect: delete the first two "这个" → consecutive_filler
-Keep:   "这个交感神经系统"
+Source: 這個這個這個交感神經系统
+Expect: delete the first two "這個" → consecutive_filler
+Keep:   "這個交感神經系统"
 ```
 
 ### Heuristics
 
 - **Emphasis vs slip**: emphasis usually has prosodic change and is intentional; slip usually has pause, hesitation, and a more complete restatement after.
 - **Response vs filler**: "嗯" after someone else speaks → response (keep); "嗯" at the start of one's own sentence → filler (delete).
-- **Podcast fine-cut: leading "对/嗯/啊" always deleted**: even when superficially a response (e.g. "对，谢谢" after speaker change, "嗯，其实我觉得" when answering), in fine-cut leading single-char response words are cleaner deleted. Only when "对/嗯" is itself a complete semantic reply (e.g. "嗯，确实是" where "嗯" expresses agreement and the rest is short) consider keeping. Long sentences leading with "对，" / "嗯，" are always tagged filler_start.
+- **Podcast fine-cut: leading "對/嗯/啊" always deleted**: even when superficially a response (e.g. "對，謝謝" after speaker change, "嗯，其實我覺得" when answering), in fine-cut leading single-char response words are cleaner deleted. Only when "對/嗯" is itself a complete semantic reply (e.g. "嗯，确實是" where "嗯" expresses agreement and the rest is short) consider keeping. Long sentences leading with "對，" / "嗯，" are always tagged filler_start.
 - **Podcast naturalness vs redundancy**: a single "嗯" is keep; many in a row or one in every sentence is redundant.
 
 ---
@@ -494,9 +494,9 @@ The LLM layer now also receives `fine_analysis_rules.json`; some edits there are
 ### Why review
 
 Rule layer does deterministic pattern matching (e.g. consecutive same-word detection), but these need semantic judgment:
-- **Single-char high-frequency word ×2** ("我我", "就就"): mostly stutter, occasionally natural speech (e.g. "对对" as agreement)
-- **High-frequency phrase ×2** ("就是就是", "然后然后"): mostly stutter, occasionally rhetorical (e.g. "怎么怎么做" as generic)
-- **Suffix match** ("在这个" + "这个"): caused by ASR boundary; confirm it's really a repeat
+- **Single-char high-frequency word ×2** ("我我", "就就"): mostly stutter, occasionally natural speech (e.g. "對對" as agreement)
+- **High-frequency phrase ×2** ("就是就是", "然後然後"): mostly stutter, occasionally rhetorical (e.g. "怎麼怎麼做" as generic)
+- **Suffix match** ("在這個" + "這個"): caused by ASR boundary; confirm it's really a repeat
 
 ### LLM review decision
 
@@ -507,9 +507,9 @@ When analyzing each batch, if `fine_analysis_rules.json` has `needsReview` edits
   "batch_range": [0, 59],
   "edits": [...],
   "rules_review": [
-    {"s": 60, "action": "confirm", "reason": "'在这个这个' is indeed a stutter repeat"},
+    {"s": 60, "action": "confirm", "reason": "'在這個這個' is indeed a stutter repeat"},
     {"s": 137, "action": "confirm", "reason": "'我我到 door dash' is a stutter"},
-    {"s": 109, "action": "reject", "reason": "'的一个一个' here means 'one by one', not stutter"}
+    {"s": 109, "action": "reject", "reason": "'的一個一個' here means 'one by one', not stutter"}
   ],
   "scan_summary": {...}
 }
@@ -519,12 +519,12 @@ When analyzing each batch, if `fine_analysis_rules.json` has `needsReview` edits
 
 | Scenario | Decision | Example |
 | --- | --- | --- |
-| Pronoun / adverb stutter | ✅ confirm (vast majority) | "我我觉得" → delete first "我" |
-| Response repetition | ❌ reject | "对对，你说得对" → "对对" is agreement |
-| "一个一个" with one-by-one meaning | ❌ reject | "一个一个地解决" → emphasizes one-by-one |
-| Generic rhetoric | ❌ reject | "怎么怎么做" → generic |
-| Oral connector stutter | ✅ confirm (mostly) | "就是就是说" → stutter |
-| Suffix-match real repeat | ✅ confirm | "在这个这个ALL IN" → "这个" is indeed repeated |
+| Pronoun / adverb stutter | ✅ confirm (vast majority) | "我我覺得" → delete first "我" |
+| Response repetition | ❌ reject | "對對，你説得對" → "對對" is agreement |
+| "一個一個" with one-by-one meaning | ❌ reject | "一個一個地解決" → emphasizes one-by-one |
+| Generic rhetoric | ❌ reject | "怎麼怎麼做" → generic |
+| Oral connector stutter | ✅ confirm (mostly) | "就是就是説" → stutter |
+| Suffix-match real repeat | ✅ confirm | "在這個這個ALL IN" → "這個" is indeed repeated |
 
 **Default lean**: when uncertain, confirm (delete). User feedback shows ×2 repeats are mostly stutter; missing a delete hurts more than over-deleting.
 

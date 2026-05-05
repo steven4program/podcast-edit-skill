@@ -1,15 +1,16 @@
 #!/usr/bin/env node
 /**
- * auto_fix.js — 根据 audit_report.json 自动Fix delete_segments
+ * auto_fix.js — automatically fix delete_segments based on audit_report.json
  *
- * process：
- *   1. restored_word_covered → 移除覆盖restore  segment（仅非 fine edit  异常覆盖）
- *   2. silence_gap → 扩展相邻 segment 以消除silencepause
+ * What it handles:
+ *   1. restored_word_covered → remove segments that wrongly cover restored content
+ *      (only for unintended overlaps, not legitimate fine edits)
+ *   2. silence_gap → extend adjacent segments to eliminate silent pauses
  *
- * 不自动process（needs 人工）：
- *   - manual_sentence_not_deleted → needs知道精确deleterange
- *   - missed_catch_not_covered → 同上
- *   - large_deletion → 仅衔接审查
+ * Not handled (requires manual review):
+ *   - manual_sentence_not_deleted → needs the precise delete range
+ *   - missed_catch_not_covered → same as above
+ *   - large_deletion → boundary-stitch review only
  *
  * Usage:
  *   node auto_fix.js <output_dir> [--dry-run]
@@ -32,7 +33,7 @@ const segPath = path.join(analysisDir, 'delete_segments_edited.json');
 const segFallback = path.join(analysisDir, 'delete_segments.json');
 
 if (!fs.existsSync(reportPath)) {
-  console.error('Please 先运line audit_cut.js generate audit_report.json');
+  console.error('請先執行 audit_cut.js 產生 audit_report.json');
   process.exit(1);
 }
 
@@ -46,12 +47,12 @@ let removedCount = 0;
 let addedCount = 0;
 let modifiedCount = 0;
 
-// --- Fix 1: 移除覆盖restore  segment ---
+// --- Fix 1: remove segments that cover restored content ---
 const restoredIssues = report.checks.restoredSentences?.issues || [];
 if (restoredIssues.length > 0) {
-  console.log(`🔧 Fixrestore覆盖: ${restoredIssues.length} 个Issue`);
+  console.log(`🔧 修正還原覆蓋：${restoredIssues.length} 個問題`);
 
-  // 收集所有needs移除  segment range
+  // Collect every segment range that needs to be removed
   const toRemove = new Set();
   for (const issue of restoredIssues) {
     const [segStart, segEnd] = issue.coveringSegment;
@@ -65,63 +66,63 @@ if (restoredIssues.length > 0) {
     return !toRemove.has(key);
   });
   removedCount += before - segs.length;
-  console.log(`   移除 ${before - segs.length} 个 segment`);
+  console.log(`   移除 ${before - segs.length} 個 segment`);
 }
 
-// --- Fix 2: 消除切点silencepause ---
+// --- Fix 2: eliminate silent pauses at cut points ---
 const silenceIssues = report.checks.cutPointSilences?.issues || [];
 if (silenceIssues.length > 0) {
-  console.log(`🔧 Fix切点silence: ${silenceIssues.length} 个pause`);
+  console.log(`🔧 修正切點靜音：${silenceIssues.length} 個停頓`);
 
   for (const issue of silenceIssues) {
-    // 策略：找到 gap 前  segment，扩展其 end 到 gap End
+    // Strategy: find the segment immediately before the gap and extend its end to the gap end
     const prevSeg = segs.find(s => Math.abs(s.end - issue.gapStart) < 0.05);
     const nextSeg = segs.find(s => Math.abs(s.start - issue.gapEnd) < 0.05);
 
     if (prevSeg) {
-      // 扩展前一个 segment  Endtime
+      // Extend the previous segment's end time
       prevSeg.end = issue.gapEnd;
       modifiedCount++;
-      console.log(`   扩展 [${issue.gapStart.toFixed(2)}] → [${issue.gapEnd.toFixed(2)}] (消除 ${issue.duration}s pause)`);
+      console.log(`   擴展 [${issue.gapStart.toFixed(2)}] → [${issue.gapEnd.toFixed(2)}]（消除 ${issue.duration}s 停頓）`);
     } else if (nextSeg) {
-      // 扩展后一个 segment  Starttime
+      // Extend the next segment's start time
       nextSeg.start = issue.gapStart;
       modifiedCount++;
-      console.log(`   扩展 [${issue.gapStart.toFixed(2)} ←] (消除 ${issue.duration}s pause)`);
+      console.log(`   擴展 [${issue.gapStart.toFixed(2)} ←]（消除 ${issue.duration}s 停頓）`);
     } else {
-      // added一个 segment 覆盖这segmentsilence
+      // Add a new segment to cover this silent gap
       segs.push({ start: issue.gapStart, end: issue.gapEnd, text: '(auto-fix silence gap)' });
       addedCount++;
-      console.log(`   added [${issue.gapStart.toFixed(2)}-${issue.gapEnd.toFixed(2)}] (消除 ${issue.duration}s pause)`);
+      console.log(`   新增 [${issue.gapStart.toFixed(2)}-${issue.gapEnd.toFixed(2)}]（消除 ${issue.duration}s 停頓）`);
     }
   }
 
   segs.sort((a, b) => a.start - b.start);
 }
 
-// --- 汇总 ---
+// --- Summary ---
 console.log(`\n${'─'.repeat(40)}`);
-console.log(`source segment 数: ${originalCount}`);
-console.log(`移除: ${removedCount}, added: ${addedCount}, modify: ${modifiedCount}`);
-console.log(`最终 segment 数: ${segs.length}`);
+console.log(`原始 segment 數：${originalCount}`);
+console.log(`移除：${removedCount}，新增：${addedCount}，修改：${modifiedCount}`);
+console.log(`最終 segment 數：${segs.length}`);
 
-// 未能自动Fix Issue
+// Issues that could not be auto-fixed
 const manualIssues = report.checks.manualDeletions?.issues || [];
 if (manualIssues.length > 0) {
-  console.log(`\n⚠️  ${manualIssues.length} 个手动deleteIssueneeds人工process`);
+  console.log(`\n⚠️  ${manualIssues.length} 個手動刪除問題需要人工處理`);
 }
 
 if (dryRun) {
-  console.log('\n[dry-run] 未writefile');
+  console.log('\n[dry-run] 未寫入檔案');
 } else {
-  // 备份原file
+  // Back up the original file
   const backupPath = segFile.replace('.json', '_backup.json');
   if (!fs.existsSync(backupPath)) {
     fs.copyFileSync(segFile, backupPath);
-    console.log(`\n💾 备份: ${backupPath}`);
+    console.log(`\n💾 備份：${backupPath}`);
   }
 
-  // writeFix后 file
+  // Write the fixed file
   if (Array.isArray(segData)) {
     fs.writeFileSync(segFile, JSON.stringify(segs, null, 2));
   } else {
@@ -129,5 +130,5 @@ if (dryRun) {
     segData[key] = segs;
     fs.writeFileSync(segFile, JSON.stringify(segData, null, 2));
   }
-  console.log(`✅ saved: ${segFile}`);
+  console.log(`✅ 已儲存：${segFile}`);
 }

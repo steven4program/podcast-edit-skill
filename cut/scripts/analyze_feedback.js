@@ -1,34 +1,34 @@
 #!/usr/bin/env node
 /**
- * feedbackanalyze器 — 从审查页  AI feedback JSON 中extract偏good调整建议
+ * Feedback analyser — extract preference-adjustment suggestions from the review page's AI feedback JSON.
  *
- * input: ai_feedback_*.json（by  review_enhanced.html  "导出 AI feedback"按钮generate）
- * output: 偏good调整建议（JSON），附置信度
+ * Input: ai_feedback_*.json (produced by the "Export AI feedback" button in review_enhanced.html)
+ * Output: preference-adjustment suggestions (JSON) with a confidence score.
  *
- * feedback JSON format:
+ * Feedback JSON shape:
  * {
  *   "missed_catches": [{ sentenceIdx, speaker, selectedText, fullSentence, type, typeLabel, reason }],
  *   "user_corrections": {
- *     "added_deletions": [sentenceIdx...],  // use 户手动添加 delete
- *     "removed_deletions": [sentenceIdx...]  // use 户撤销  AI delete
+ *     "added_deletions": [sentenceIdx...],  // user-added deletions
+ *     "removed_deletions": [sentenceIdx...]  // user-restored AI deletions
  *   }
  * }
  *
  * Usage:
  *   node analyze_feedback.js <feedback.json> [analysis.json] [fine_analysis.json]
  *
- * optionalargument:
- *   analysis.json — step 5a   semantic_deep_analysis.json（use 于理解被restoredelete type）
- *   fine_analysis.json — step 5b   fine_analysis.json（use 于理解finetype）
+ * Optional args:
+ *   analysis.json — step 5a's semantic_deep_analysis.json (helps understand restored deletion types)
+ *   fine_analysis.json — step 5b's fine_analysis.json (helps understand fine edit types)
  */
 
 const fs = require('fs');
 const path = require('path');
 
-// --- feedbacktype到 editing_rules  映射 ---
+// --- Feedback-type → editing_rules mapping ---
 
 const FEEDBACK_TYPE_TO_RULE = {
-  // finetype（来自 missed_catches   type charactersegment）
+  // Fine types (from missed_catches' type field)
   in_sentence_repeat: 'filler_words',
   repeated_sentence: 'repeated_sentences',
   stutter: 'stutter',
@@ -37,7 +37,7 @@ const FEEDBACK_TYPE_TO_RULE = {
   single_filler: 'filler_words',
   silence: 'silence',
   residual_sentence: 'residual_sentences',
-  // contenttype（来自 semantic_deep_analysis   type charactersegment）
+  // Content types (from semantic_deep_analysis' type field)
   pre_show: 'content_analysis',
   tech_debug: 'content_analysis',
   chit_chat: 'content_analysis',
@@ -46,7 +46,7 @@ const FEEDBACK_TYPE_TO_RULE = {
   production_talk: 'content_analysis'
 };
 
-// --- analyzefunction ---
+// --- Analyser ---
 
 function analyzeFeedback(feedbackPath, analysisPath, fineAnalysisPath) {
   const feedback = JSON.parse(fs.readFileSync(feedbackPath, 'utf8'));
@@ -72,7 +72,7 @@ function analyzeFeedback(feedbackPath, analysisPath, fineAnalysisPath) {
     }
   };
 
-  // --- analyze missed_catches（AI 遗漏） ---
+  // --- Analyse missed_catches (AI misses) ---
   const missedByType = {};
   for (const mc of (feedback.missed_catches || [])) {
     const type = mc.type || 'unknown';
@@ -88,7 +88,7 @@ function analyzeFeedback(feedbackPath, analysisPath, fineAnalysisPath) {
       feedback_type: type,
       count: items.length,
       confidence: Math.min(0.5 + items.length * 0.1, 0.95),
-      reason: `AI 遗漏 ${items.length} 个 "${type}" type content`,
+      reason: `AI 遺漏 ${items.length} 個 "${type}" 類型內容`,
       examples: items.slice(0, 3).map(i => ({
         text: i.selectedText?.slice(0, 50) || '',
         sentence: i.fullSentence?.slice(0, 80) || ''
@@ -96,10 +96,10 @@ function analyzeFeedback(feedbackPath, analysisPath, fineAnalysisPath) {
     });
   }
 
-  // --- analyze removed_deletions（use 户restore AI delete ） ---
+  // --- Analyse removed_deletions (user-restored AI deletions) ---
   const removedIndices = feedback.user_corrections?.removed_deletions || [];
   if (removedIndices.length > 0 && analysis) {
-    // find被restoresentence sourcedeletetype
+    // Look up the original deletion type for each restored sentence
     const removedByType = {};
     const sentenceMap = {};
 
@@ -128,12 +128,12 @@ function analyzeFeedback(feedbackPath, analysisPath, fineAnalysisPath) {
         feedback_type: type,
         count: items.length,
         confidence: Math.min(0.5 + items.length * 0.1, 0.90),
-        reason: `use 户restore ${items.length} 个 "${type}" type  AI delete`,
+        reason: `使用者還原 ${items.length} 個 "${type}" 類型的 AI 刪除`,
         examples: items.slice(0, 3).map(i => ({ idx: i.idx, reason: i.reason }))
       });
     }
 
-    // 检查whether有finetype被restore（从 fineAnalysis）
+    // Check whether any fine-edit types were restored (from fineAnalysis)
     if (fineAnalysis && fineAnalysis.edits) {
       const fineEditMap = {};
       for (const edit of fineAnalysis.edits) {
@@ -158,7 +158,7 @@ function analyzeFeedback(feedbackPath, analysisPath, fineAnalysisPath) {
           feedback_type: type,
           count: items.length,
           confidence: Math.min(0.5 + items.length * 0.15, 0.90),
-          reason: `use 户restore ${items.length} 个fine "${type}" type delete`,
+          reason: `使用者還原 ${items.length} 個 fine "${type}" 類型刪除`,
           examples: items.slice(0, 3).map(i => ({
             text: i.deleteText?.slice(0, 30) || '',
             rule: i.rule
@@ -168,7 +168,7 @@ function analyzeFeedback(feedbackPath, analysisPath, fineAnalysisPath) {
     }
   }
 
-  // --- analyze added_deletions（use 户added delete） ---
+  // --- Analyse added_deletions (user-added deletions) ---
   const addedCount = feedback.user_corrections?.added_deletions?.length || 0;
   if (addedCount > 3) {
     results.adjustments.push({
@@ -177,14 +177,14 @@ function analyzeFeedback(feedbackPath, analysisPath, fineAnalysisPath) {
       feedback_type: 'user_added',
       count: addedCount,
       confidence: Math.min(0.4 + addedCount * 0.05, 0.80),
-      reason: `use 户手动added ${addedCount} 个delete，可能needs提高整体激进度`
+      reason: `使用者手動新增 ${addedCount} 個刪除，可能需提高整體激進度`
     });
   }
 
-  // --- 滤低置信度建议 ---
+  // --- Filter out low-confidence suggestions ---
   results.adjustments = results.adjustments.filter(a => a.confidence >= 0.5);
 
-  // --- 按置信度sort ---
+  // --- Sort by confidence ---
   results.adjustments.sort((a, b) => b.confidence - a.confidence);
 
   return results;
@@ -200,14 +200,14 @@ if (require.main === module) {
   if (!feedbackPath) {
     console.log(`Usage: node analyze_feedback.js <feedback.json> [analysis.json] [fine_analysis.json]
 
-analyze审查页导出  AI feedback，generate editing_rules 调整建议。
+Analyse the AI feedback exported from the review page and generate editing_rules adjustment suggestions.
 
-argument:
-  feedback.json       审查页"导出 AI feedback"generate file
-  analysis.json       (optional) step 5a   semantic_deep_analysis.json
-  fine_analysis.json  (optional) step 5b   fine_analysis.json
+Args:
+  feedback.json       file produced by the review page's "Export AI feedback"
+  analysis.json       (optional) step 5a's semantic_deep_analysis.json
+  fine_analysis.json  (optional) step 5b's fine_analysis.json
 
-output: JSON format 调整建议
+Output: JSON-formatted adjustment suggestions.
 
 Example:
   node analyze_feedback.js ai_feedback_2026-02-21.json \\
@@ -216,25 +216,25 @@ Example:
   }
 
   if (!fs.existsSync(feedbackPath)) {
-    console.error(`❌ file does not exist: ${feedbackPath}`);
+    console.error(`❌ 檔案不存在：${feedbackPath}`);
     process.exit(1);
   }
 
   const results = analyzeFeedback(feedbackPath, analysisPath, fineAnalysisPath);
 
-  // output人类可读摘要到 stderr
-  console.error(`\n📊 feedbackanalyzeresult:`);
-  console.error(`   AI 遗漏: ${results.summary.missed_catches}`);
-  console.error(`   use 户addeddelete: ${results.summary.added_deletions}`);
-  console.error(`   use 户restoredelete: ${results.summary.removed_deletions}`);
-  console.error(`   调整建议: ${results.adjustments.length} 条\n`);
+  // Print a human-readable summary to stderr
+  console.error(`\n📊 回饋分析結果：`);
+  console.error(`   AI 遺漏：${results.summary.missed_catches}`);
+  console.error(`   使用者新增刪除：${results.summary.added_deletions}`);
+  console.error(`   使用者還原刪除：${results.summary.removed_deletions}`);
+  console.error(`   調整建議：${results.adjustments.length} 條\n`);
 
   for (const adj of results.adjustments) {
     const arrow = adj.direction.includes('increase') ? '↑' : '↓';
-    console.error(`   ${arrow} [${adj.target_rule}] ${adj.reason} (置信度: ${adj.confidence.toFixed(2)})`);
+    console.error(`   ${arrow} [${adj.target_rule}] ${adj.reason}（置信度：${adj.confidence.toFixed(2)}）`);
   }
 
-  // output完整 JSON 到 stdout
+  // Print full JSON to stdout
   console.log(JSON.stringify(results, null, 2));
 }
 

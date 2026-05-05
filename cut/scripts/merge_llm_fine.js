@@ -166,14 +166,14 @@ if (fs.existsSync(llmPath)) {
       deleteEnd: result.de,
       reason: edit.reason || ''
     };
-    // 传递 onset detection 精修元data
+    // Pass through onset-detection refinement metadata
     if (result._refinePoints) {
       feEntry._refinePoints = result._refinePoints;
     }
 
     // === KEEPTEXT TRIMMING ===
     // For stutter edits, deleteText often includes the kept portion
-    // e.g. deleteText='选select' keepText='select' → should only delete '选' (W314), not both W314+W315
+    // e.g. deleteText='選select' keepText='select' → should only delete '選' (W314), not both W314+W315
     // Fix: trim keepText words from the end of the delete range
     if (edit.keepText && edit.keepText.length > 0 && result.wordRange) {
       const keepClean = edit.keepText.replace(/[，。！？、：；""''（）\s]/g, '');
@@ -309,13 +309,13 @@ function overlapsExistingSelfCorrection(candidateStart, candidateEnd) {
   return false;
 }
 
-// Hesitation/filler words that appear between a false start and its correction
 // Hesitation/filler words that appear between a false start and its correction.
 // Must be narrow to avoid matching parallel structures where content words
 // happen to be in the gap. '就'/'那' excluded - too common as content words.
+// Matched against simplified-Chinese FunASR output — keep simplified.
 const HESITATION_WORDS = new Set([
-  '嗯', '呃', '啊', '哦', '就是', 'good像', '那个', '这个',
-  '就是说', '怎么说', 'OK', '哎', '额'
+  '嗯', '呃', '啊', '哦', '就是', '好像', '那個', '這個',
+  '就是説', '怎麼説', '那', '哎', '額'
 ]);
 
 let selfCorrectionEdits = [];
@@ -380,8 +380,8 @@ for (const sent of sentences) {
 
         // --- PARALLEL STRUCTURE FILTER ---
         // Detects deliberate parallel/list structures like:
-        //   "要么就fight，要么就flee，要么就僵住"
-        //   "还能吃巧克力，还能吃番茄"
+        //   "要麼就fight，要麼就flee，要麼就僵住"
+        //   "還能吃巧克力，還能吃番茄"
         // These are NOT self-corrections and should be skipped.
 
         const firstAfterPos = ai + k;
@@ -494,7 +494,7 @@ for (const sent of sentences) {
           keepText: keepText,
           deleteStart: deleteStartTime,
           deleteEnd: deleteEndTime,
-          reason: `same-prefix expansion: "${prefixText}" 重复，第二次更完整`,
+          reason: `same-prefix expansion: "${prefixText}" 重複，第二次更完整`,
           confidence: confidence,
           prefixLength: prefixText.length,
           prefixWords: k
@@ -578,7 +578,7 @@ const totalTimeSaved = merged.reduce((sum, e) => {
 // === POST-MERGE GAP CLEANUP ===
 // After all edits are determined, simulate the post-deletion timeline
 // and find gaps > threshold that were created by merging adjacent silences.
-// See: baseedit规rule/3-silence segmentprocess.md "merge间隙二次扫描"
+// See: editing-rules/3-silence segment process.md "post-merge gap rescan"
 
 console.log('\n🔍 Post-merge gap cleanup...');
 
@@ -660,13 +660,31 @@ for (let i = 1; i < keptWords.length; i++) {
       }
     }
 
+    // Find dependencies: any non-silence edit whose delete range falls within
+    // the gap span [prevKeptWord.end, nextKeptWord.start]. If any of these edits
+    // is later disabled by the user, the silence_merged should be auto-suppressed
+    // (handled by template via the dependsOn list).
+    const gapStart = keptWords[i - 1].end;
+    const gapEnd = keptWords[i].start;
+    const dependsOn = [];
+    for (const e of merged) {
+      if (e.type === 'silence' || e.type === 'silence_merged') continue;
+      const ds = e.deleteStart ?? e.ds ?? 0;
+      const de = e.deleteEnd ?? e.de ?? 0;
+      // overlap with gap span
+      if (de > gapStart && ds < gapEnd) {
+        dependsOn.push(e); // store ref; resolve to final idx after sort
+      }
+    }
+
     gapEdits.push({
       sentenceIdx: sentIdx,
       type: 'silence_merged',
       deleteStart: trimStart,
       deleteEnd: trimEnd,
       duration: trimDur,
-      reason: `deletemerge后间隙${gap.toFixed(2)}s→keep${SILENCE_THRESHOLD}s`
+      reason: `合併後間隙 ${gap.toFixed(2)}s → 保留 ${SILENCE_THRESHOLD}s`,
+      _dependsOnRefs: dependsOn, // resolved to idx after final sort
     });
   }
 }
@@ -679,6 +697,17 @@ if (gapEdits.length > 0) {
     return aStart - bStart;
   });
   merged.forEach((e, i) => e.idx = i);
+
+  // Resolve silence_merged dependsOn refs → final idx values, then strip the temp field.
+  // This lets the review UI auto-suppress silence_merged when its source content edits
+  // are restored by the user (otherwise the silence_merged keeps cutting after the
+  // original delete is undone — pitfall: silence_merged-orphan suppression).
+  for (const e of merged) {
+    if (e.type === 'silence_merged' && e._dependsOnRefs) {
+      e.dependsOn = e._dependsOnRefs.map(ref => ref.idx).filter(i => Number.isInteger(i));
+      delete e._dependsOnRefs;
+    }
+  }
 
   const gapTimeSaved = gapEdits.reduce((s, e) => s + e.duration, 0);
   console.log(`   Found ${gapEdits.length} merged gaps, trimmed ${gapTimeSaved.toFixed(1)}s`);
@@ -699,10 +728,11 @@ const finalTimeSaved = merged.reduce((sum, e) => {
   return sum + (de - ds);
 }, 0);
 
-// ── 添加 filler/stutter 边界精修点 ──
-// when edit  deleteStart/deleteEnd  and 相邻word time间距很小（<50ms），
-// 说明是紧密连读，ASR time戳可能不够精确，标记为needs  onset detection 精修。
-const TIGHT_GAP_MS = 50;  // 紧密连读threshold
+// ── Add filler/stutter boundary refinement points ──
+// When the edit's deleteStart/deleteEnd is very close to an adjacent word (<50ms),
+// it's tight connected speech and the ASR timestamps may be imprecise — mark for
+// onset-detection refinement.
+const TIGHT_GAP_MS = 50;  // tight-connection threshold
 let fillerRefineCount = 0;
 let fillerPreOnsetCount = 0;
 
@@ -713,7 +743,7 @@ for (const edit of merged) {
   const de = edit.deleteEnd ?? edit.de ?? 0;
   if (!ds || !de) continue;
 
-  // 只OK filler、stutter、self_correction type添加精修
+  // Only refine filler / stutter / self_correction edits
   const needsRefine = ['filler', 'stutter', 'self_correction', 'self_correction_rules',
                        'single_filler', 'residual_sentence'].includes(edit.type)
                       || (edit.rule && edit.rule.includes('tone words'));
@@ -721,7 +751,7 @@ for (const edit of merged) {
 
   if (!edit._refinePoints) edit._refinePoints = [];
 
-  // find deleteStart 前面最近 word
+  // Find the words immediately before/after deleteStart
   let prevWord = null;
   let nextWord = null;
   for (const w of speechWords) {
@@ -729,9 +759,10 @@ for (const edit of merged) {
     if (w.start >= de - 0.001 && !nextWord) nextWord = w;
   }
 
-  // ── 陷阱 39: filler pre-onset 扩展 ──
-  // ASR word起始time不精确，filler 声学 onset 可能比wordtime戳早 100-200ms
-  // 扩展 deleteStart 到 prevWord.end + 50ms，覆盖间隙中 呼吸/声门准备
+  // ── Pitfall 39: filler pre-onset expansion ──
+  // ASR word-start times are imprecise; the filler's acoustic onset may precede
+  // the word timestamp by 100-200ms. Extend deleteStart to prevWord.end + 50ms
+  // so we cover the breath / glottal preparation in the gap.
   if (prevWord && (ds - prevWord.end) > 0.05) {
     const extendedStart = parseFloat((prevWord.end + 0.05).toFixed(4));
     if (extendedStart < ds) {
@@ -742,16 +773,16 @@ for (const edit of merged) {
     }
   }
 
-  // deleteStart  and 前一个word 间距
+  // Distance between deleteStart and the previous word
   if (prevWord && (ds - prevWord.end) * 1000 < TIGHT_GAP_MS) {
-    // 已有 partial_start 精修点then不重复添加
+    // Skip if a partial_start refinement is already present
     if (!edit._refinePoints.some(p => p.type === 'partial_start')) {
       edit._refinePoints.push({ time: ds, type: 'filler_start', searchWindow: 0.10, direction: 'right' });
       fillerRefineCount++;
     }
   }
 
-  // deleteEnd  and 后一个word 间距
+  // Distance between deleteEnd and the next word
   if (nextWord && (nextWord.start - de) * 1000 < TIGHT_GAP_MS) {
     if (!edit._refinePoints.some(p => p.type === 'partial_end')) {
       edit._refinePoints.push({ time: de, type: 'filler_end', searchWindow: 0.10, direction: 'left' });
@@ -759,14 +790,14 @@ for (const edit of merged) {
     }
   }
 
-  // 清理空array
+  // Clean up empty arrays
   if (edit._refinePoints.length === 0) delete edit._refinePoints;
 }
 if (fillerPreOnsetCount > 0) {
-  console.log(`🔊 扩展 ${fillerPreOnsetCount} 个 filler/stutter deleteStart（pre-onset 覆盖）`);
+  console.log(`🔊 擴展 ${fillerPreOnsetCount} 個 filler/stutter deleteStart（pre-onset 覆蓋）`);
 }
 if (fillerRefineCount > 0) {
-  console.log(`🔍 标记 ${fillerRefineCount} 个 filler/stutter 紧密边界needs  onset detection 精修`);
+  console.log(`🔍 標記 ${fillerRefineCount} 個 filler/stutter 緊密邊界需 onset detection 精修`);
 }
 
 const result = {
@@ -843,7 +874,7 @@ function mapTextToTimestamps(sent, deleteText) {
   const puncRe = /[，。！？、：；""''（）\s]/g;
 
   let ds = parseFloat(startWord.start.toFixed(2));
-  const refinePoints = [];  // 收集needs onset detection 精修 time点
+  const refinePoints = [];  // 收集needs onset detection 精修 time點
 
   // Check if delete text starts mid-word
   const startWordClean = startWord.text.replace(puncRe, '');

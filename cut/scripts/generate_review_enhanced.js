@@ -38,24 +38,24 @@ const audioSrc = args.audio || '1_transcript/audio_seekable.mp3';
 const outputFile = args.output || '../review_enhanced.html';
 const title = args.title || 'Podcast review (editable)';
 
-// ===== 模板path =====
+// ===== Template path =====
 const scriptDir = path.dirname(process.argv[1] || __filename);
 const templateFile = path.resolve(scriptDir, '../templates/review_enhanced.html');
 
-// ===== 检查file =====
+// ===== File checks =====
 function check(f, name) {
   if (!fs.existsSync(f)) {
-    console.error(`❌ not found${name}: ${f}`);
+    console.error(`❌ 找不到${name}：${f}`);
     process.exit(1);
   }
 }
-check(sentencesFile, 'sentencefile');
-check(wordsFile, 'wordfile');
+check(sentencesFile, 'sentence file');
+check(wordsFile, 'word file');
 check(analysisFile, 'semantic analysis');
-check(templateFile, 'HTML模板');
+check(templateFile, 'HTML template');
 
-// ===== readdata =====
-console.log('📖 readdata...');
+// ===== Load data =====
+console.log('📖 載入資料...');
 const sentences = fs.readFileSync(sentencesFile, 'utf8').split('\n').filter(l => l.trim());
 const allWords = JSON.parse(fs.readFileSync(wordsFile, 'utf8'));
 const analysis = JSON.parse(fs.readFileSync(analysisFile, 'utf8'));
@@ -63,16 +63,16 @@ const analysis = JSON.parse(fs.readFileSync(analysisFile, 'utf8'));
 let fineAnalysis = null;
 if (fs.existsSync(fineFile)) {
   fineAnalysis = JSON.parse(fs.readFileSync(fineFile, 'utf8'));
-  console.log(`   fineanalyze: ${fineAnalysis.edits.length} 个edit`);
+  console.log(`   fine 分析：${fineAnalysis.edits.length} 個編輯`);
 }
 
-// ===== 构建 actual_words index（跳 gap  and  speaker label）=====
+// ===== Build actual_words index (skip gaps and speaker labels) =====
 const actualWords = allWords.filter(w => !w.isGap && !w.isSpeakerLabel);
-console.log(`   总word条: ${allWords.length}, 实际word: ${actualWords.length}, sentence: ${sentences.length}`);
+console.log(`   總詞條：${allWords.length}，實際詞：${actualWords.length}，句子：${sentences.length}`);
 
-// ===== 构建delete集合 =====
+// ===== Build deletion sets =====
 const deletedSet = new Set();
-const suggestedDeleteSet = new Set();  // 建议delete（质量优化）
+const suggestedDeleteSet = new Set();  // suggested deletions (quality polish)
 const blockMap = {};  // sentenceIdx → block info
 
 if (analysis.sentences) {
@@ -93,8 +93,8 @@ if (analysis.blocks) {
   });
 }
 
-// ===== 构建fineedit映射 =====
-const fineEditMap = {};  // sentenceIdx → [edit, edit, ...]  (Supportedeachmulti个edit)
+// ===== Build fine-edit map =====
+const fineEditMap = {};  // sentenceIdx → [edit, edit, ...] (multiple edits per sentence supported)
 if (fineAnalysis) {
   fineAnalysis.edits.forEach((edit, idx) => {
     edit._idx = idx;
@@ -118,7 +118,7 @@ for (let i = 0; i < sentences.length; i++) {
   const speaker = parts[2];
   const text = parts[3];
 
-  // word-leveltime戳（actual_words index！）
+  // word-level timestamps (indexed into actual_words!)
   const wordsArr = [];
   for (let wi = startWordIdx; wi <= Math.min(endWordIdx, actualWords.length - 1); wi++) {
     const w = actualWords[wi];
@@ -150,7 +150,7 @@ for (let i = 0; i < sentences.length; i++) {
     isSuggestedDelete: suggestedDeleteSet.has(idx)
   };
 
-  // deletetype
+  // Deletion type
   if ((deletedSet.has(idx) || suggestedDeleteSet.has(idx)) && blockMap[idx]) {
     entry.deleteType = blockMap[idx].type;
     if (blockMap[idx].confidence === 'suggested') {
@@ -158,10 +158,10 @@ for (let i = 0; i < sentences.length; i++) {
     }
   }
 
-  // fineedit（Supportedeachmulti个edit）
+  // Fine edits (multiple per sentence supported)
   const feList = fineEditMap[idx] || [];
 
-  // 辅助function：构建single个 fineEdit entry
+  // Helper: build a single fineEdit entry
   function buildFeEntry(fe) {
     const feEntry = {
       idx: fe._idx,
@@ -175,16 +175,16 @@ for (let i = 0; i < sentences.length; i++) {
       feEntry.wholeSentence = true;
     }
 
-    // 优先使use  fine_analysis 自带  ds/de（精确）
+    // Prefer fine_analysis's own ds/de (precise)
     if (fe.ds !== undefined && fe.de !== undefined) {
       feEntry.ds = Math.round(fe.ds * 100) / 100;
       feEntry.de = Math.round(fe.de * 100) / 100;
     } else if (fe.deleteStart !== undefined && fe.deleteEnd !== undefined) {
-      // silence edituse  deleteStart/deleteEnd charactersegment名
+      // Silence edits use deleteStart/deleteEnd field names
       feEntry.ds = Math.round(fe.deleteStart * 100) / 100;
       feEntry.de = Math.round(fe.deleteEnd * 100) / 100;
     } else if (fe.deleteText && wordsArr.length > 0) {
-      // Fallback: 文本match
+      // Fallback: text match
       const wordTexts = wordsArr.map(w => w.t);
       const fullText = wordTexts.join('');
       const pos = fullText.indexOf(fe.deleteText);
@@ -203,7 +203,7 @@ for (let i = 0; i < sentences.length; i++) {
       }
     }
 
-    // silenceedit：从 allWords   gap 元素read精确time
+    // Silence edits: read precise time from the matching gap element in allWords
     if (fe.type === 'silence' && feEntry.ds === undefined && fe.wordRange) {
       const gap = allWords[fe.wordRange[0]];
       if (gap) {
@@ -212,7 +212,7 @@ for (let i = 0; i < sentences.length; i++) {
       }
     }
 
-    // use  wordRange 精确calculate charOffset
+    // Use wordRange to compute the precise charOffset
     if (fe.wordRange && fe.deleteText) {
       const relStart = fe.wordRange[0] - startWordIdx;
       if (relStart >= 0 && relStart < wordsArr.length) {
@@ -233,20 +233,20 @@ for (let i = 0; i < sentences.length; i++) {
   }
 
   if (feList.length > 0) {
-    //  min 离：文本edit（stutter/filler/etc） and silenceedit
+    // Split: text edits (stutter/filler/etc.) vs silence edits
     const textEdits = feList.filter(fe => fe.type !== 'silence');
     const silenceEdits = feList.filter(fe => fe.type === 'silence');
 
-    // fineEdit = 主要 文本edit（前端渲染use ），e.g.果nothenuse 第一个silence
+    // fineEdit = the primary text edit (used by the front-end); fall back to first silence
     const primaryFe = textEdits.length > 0 ? textEdits[0] : silenceEdits[0];
     entry.fineEdit = buildFeEntry(primaryFe);
 
-    // 额外 silenceedit（e.g.果主edit不是silence，额外 silence也要加到跳column表里）
+    // Extra silence edits (when the primary edit is not silence, append silences to the skip list)
     if (textEdits.length > 0 && silenceEdits.length > 0) {
       entry.extraSilences = silenceEdits.map(buildFeEntry);
     }
 
-    // 额外 文本edit（e.g.果同一有multi个 stutter）
+    // Extra text edits (when one sentence has multiple stutters)
     if (textEdits.length > 1) {
       entry.extraFineEdits = textEdits.slice(1).map(buildFeEntry);
     }
@@ -255,7 +255,7 @@ for (let i = 0; i < sentences.length; i++) {
   sentencesData.push(entry);
 }
 
-// 填充 endTime（下一  startTime，最后一use 最后word  end）
+// Fill endTime (next sentence's startTime; for the last sentence, use the last word's end)
 for (let i = 0; i < sentencesData.length; i++) {
   if (i + 1 < sentencesData.length) {
     sentencesData[i].endTime = sentencesData[i + 1].startTime;
@@ -265,9 +265,10 @@ for (let i = 0; i < sentencesData.length; i++) {
   }
 }
 
-// ===== 首pause标记（将尾 silence 也传to 下一display）=====
-// use 户审查时，pause感知在下一start，而非上一末尾
-// 所以each个 silence 除标注在 prevSentence，还要作为 incomingSilence 传to  nextSentence
+// ===== Leading-pause marker (also surface trailing silences on the next sentence) =====
+// During user review, the perceived pause is at the start of the next sentence,
+// not the end of the previous one. So each silence — beyond being marked on
+// prevSentence — is also forwarded as an incomingSilence on nextSentence.
 const sentIdxToPos = {};
 sentencesData.forEach((s, pos) => { sentIdxToPos[s.idx] = pos; });
 if (fineAnalysis) {
@@ -275,7 +276,7 @@ if (fineAnalysis) {
     if (edit.type !== 'silence') return;
     const curPos = sentIdxToPos[edit.sentenceIdx];
     if (curPos === undefined) return;
-    // 找下一个非delete
+    // Find the next non-deleted sentence
     for (let np = curPos + 1; np < sentencesData.length; np++) {
       const nextS = sentencesData[np];
       if (!nextS.isAiDeleted) {
@@ -294,17 +295,17 @@ if (fineAnalysis) {
 }
 const incomingCount = sentencesData.filter(s => s.incomingSilences).length;
 if (incomingCount > 0) {
-  console.log(`   首pause标记: ${incomingCount} 个sentence`);
+  console.log(`   首停頓標記：${incomingCount} 個句子`);
 }
 
-// ===== statistics =====
+// ===== Stats =====
 const totalSentences = sentencesData.length;
 const deletedCount = sentencesData.filter(s => s.isAiDeleted && !s.isSuggestedDelete).length;
 const suggestedCount = sentencesData.filter(s => s.isSuggestedDelete).length;
 const fineEditCount = sentencesData.filter(s => s.fineEdit).length;
-console.log(`   sentence: ${totalSentences}, 确定delete: ${deletedCount}, 建议delete: ${suggestedCount}, fine: ${fineEditCount}`);
+console.log(`   句子：${totalSentences}，確定刪除：${deletedCount}，建議刪除：${suggestedCount}，fine：${fineEditCount}`);
 
-// ===== 构建 blocksData =====
+// ===== Build blocksData =====
 const blocksDataArr = [];
 if (analysis.blocks) {
   analysis.blocks.forEach(block => {
@@ -315,7 +316,7 @@ if (analysis.blocks) {
       reason: block.reason || '',
       confidence: block.confidence || 'confirmed'
     };
-    // calculateduration
+    // Compute duration
     const startSent = sentencesData.find(s => s.idx === block.range[0]);
     const endSent = sentencesData.find(s => s.idx === block.range[1]);
     if (startSent && endSent) {
@@ -330,7 +331,7 @@ if (analysis.blocks) {
   });
 }
 
-// ===== 构建speaker样式 and 类映射 =====
+// ===== Build speaker styles + class mapping =====
 const speakerColors = ['var(--blue)', 'var(--green)', 'var(--purple)', 'var(--orange, #d97706)', 'var(--red, #dc2626)'];
 const uniqueSpeakers = [...new Set(sentencesData.map(s => s.speaker))];
 const speakerStyles = uniqueSpeakers.map((sp, i) => {
@@ -342,8 +343,8 @@ const speakerClassParts = uniqueSpeakers.map((sp, i) => {
 speakerClassParts.push(`'sp-0'`);
 const speakerClassExpr = speakerClassParts.join(' : ');
 
-// ===== 注入模板 =====
-console.log('📝 generate HTML...');
+// ===== Inject template =====
+console.log('📝 產生 HTML...');
 let template = fs.readFileSync(templateFile, 'utf8');
 
 const dataJson = JSON.stringify(sentencesData);
@@ -362,5 +363,5 @@ fs.writeFileSync(outputFile, template);
 const sizeKB = Math.round(fs.statSync(outputFile).size / 1024);
 
 console.log(`✅ Generated: ${outputFile} (${sizeKB}KB)`);
-console.log(`   sentence: ${totalSentences}, AI确定delete: ${deletedCount}, AI建议delete: ${suggestedCount}, fine: ${fineEditCount}`);
-console.log(`   word-leveltime戳: ${sentencesData.reduce((sum, s) => sum + s.words.length, 0)} 个`);
+console.log(`   句子：${totalSentences}，AI 確定刪除：${deletedCount}，AI 建議刪除：${suggestedCount}，fine：${fineEditCount}`);
+console.log(`   word-level 時間戳：${sentencesData.reduce((sum, s) => sum + s.words.length, 0)} 個`);

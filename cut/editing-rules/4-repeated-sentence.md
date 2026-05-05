@@ -52,39 +52,39 @@ if (mid.text.length <= 5) {  // middle is residual
 
 | Sentence A | Sentence B | Delete |
 | --- | --- | --- |
-| "这是我剪出来的一个案例" | "这是我剪出来的一个案例" | A (exact repeat) |
-| "我用cloud code的excuse功能做一个剪辑agent" | "所以我用cloud code的excuse功能做一个剪辑agent" | A |
-| "第二个是是q制技能系统第二个" | "第二个是scale技能系统" | A |
-| "好我们接下来开始怎么去" | "好我们接下来开始怎么去做一个剪口拨" | A |
-| "我们就可以看到这里新的视频" | "我们就可以看到这里新的视频了" | A |
+| "這是我剪出來的一個案例" | "這是我剪出來的一個案例" | A (exact repeat) |
+| "我用claude code的excuse功能做一個剪輯agent" | "所以我用claude code的excuse功能做一個剪輯agent" | A |
+| "第二個是是q制技能系统第二個" | "第二個是scale技能系统" | A |
+| "好我們接下來開始怎麼去" | "好我們接下來開始怎麼去做一個剪口拨" | A |
+| "我們就可以看到這裡新的影片" | "我們就可以看到這裡新的影片了" | A |
 
 ## Across-one repeat (residual sentence in the middle)
 
 When a short residual sits between two repeats, detect them too:
 
 ```
-A:        "这是我剪出来的一个案例"
+A:        "這是我剪出來的一個案例"
 residual: "他呢"                      ← residual in the middle
-B:        "这是我剪出来的一个案例"
+B:        "這是我剪出來的一個案例"
 
 → delete A + residual
 ```
 
 | Sentence A | Middle residual | Sentence B | Delete |
 | --- | --- | --- | --- |
-| "这是我剪出来的一个案例" | "他呢" | "这是我剪出来的一个案例" | A + residual |
-| "具体怎么做呢我们首先下载这个" | "提示词" | "具体怎么做呢我们首先复制这个提示词" | A + residual |
-| "打开我们的AI" | "打开我们的" | "打开我们的AI然后告诉他去下载" | A + residual |
+| "這是我剪出來的一個案例" | "他呢" | "這是我剪出來的一個案例" | A + residual |
+| "實際上怎麼做呢我們先下載這個" | "提示詞" | "實際上怎麼做呢我們先複製這個提示詞" | A + residual |
+| "打開我們的AI" | "打開我們的" | "打開我們的AI然後告訴他去下載" | A + residual |
 
 ## Multiple repeats
 
 When the same line is started 3+ times, delete the incomplete ones; keep only the final complete version:
 
 ```
-"以前呢我会把所有的技能"          → delete
-"以前呢我会把所有的功能做"        → delete
-"以前呢我会把所有的功能做都"      → delete
-"以前呢我会把所有的功能都做成一个大的scale" → keep
+"以前呢我會把所有的技能"          → delete
+"以前呢我會把所有的功能做"        → delete
+"以前呢我會把所有的功能做都"      → delete
+"以前呢我會把所有的功能都做成一個大的scale" → keep
 ```
 
 ## Pitfalls

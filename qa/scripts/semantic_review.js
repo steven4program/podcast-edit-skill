@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 /**
- * Phase C: 语义层质检 — semantic_review.js
+ * Phase C: semantic-layer QA — semantic_review.js
  *
- * OKedit后audio 重transcription and 预期文本doword-level LCS OK齐，
- * detect残留filler、残留卡顿、语义断裂、content缺失。
+ * Re-transcribe the edited audio and align it word-by-word against the expected
+ * text via LCS, then surface residual fillers, residual stutters, semantic
+ * breaks, and missing content.
  *
  * Usage:
  *   node semantic_review.js \
@@ -13,13 +14,13 @@
  *     --sentences <sentences.txt> \
  *     --output <qa_semantic_report.json>
  *
- * input:
- *   - new_subtitles_words.json:  edit后audio 重transcription（word-leveltime戳）
- *   - original_subtitles_words.json: sourceaudio transcribe（word-leveltime戳）
- *   - delete_segments_edited.json: 最终deletesegmentcolumn表
- *   - sentences.txt: sourcesentence min 割
+ * Inputs:
+ *   - new_subtitles_words.json: re-transcription of the edited audio (word-level timestamps)
+ *   - original_subtitles_words.json: transcription of the source audio (word-level timestamps)
+ *   - delete_segments_edited.json: final list of delete segments
+ *   - sentences.txt: sentence segmentation of the source
  *
- * output:
+ * Output:
  *   qa_semantic_report.json
  */
 
@@ -38,15 +39,16 @@ function parseArgs() {
   return opts;
 }
 
-// --- constant ---
+// --- Constants ---
 
-const FILLER_PATTERNS = /^(嗯|啊|呃|那个|OK|就是|然后|所以说|OKOKOK)$/;
-const STUTTER_MIN_LENGTH = 1;  // 最few重复character数
+// Patterns are matched against FunASR output (simplified Chinese) — keep them simplified.
+const FILLER_PATTERNS = /^(嗯|啊|呃|那個|OK|就是|然後|所以説|OKOKOK)$/;
+const STUTTER_MIN_LENGTH = 1;  // minimum repeated character count
 
-// --- 核心function ---
+// --- Core functions ---
 
 /**
- * 从sourcetranscribe中calculate"预期keep文本"：原文 - deletesegment
+ * Compute "expected kept text" from the source transcription: original minus delete segments.
  */
 function computeExpectedText(originalWords, deleteSegments) {
   const kept = [];
@@ -62,8 +64,8 @@ function computeExpectedText(originalWords, deleteSegments) {
 }
 
 /**
- * word-level LCS OK齐
- * 返回: { matched, onlyInExpected, onlyInActual }
+ * Word-level LCS alignment.
+ * Returns: { matched, onlyInExpected, onlyInActual }
  */
 function wordLevelLCS(expected, actual) {
   const expTexts = expected.map(w => w.text || w.word);
@@ -84,7 +86,7 @@ function wordLevelLCS(expected, actual) {
     }
   }
 
-  // 回溯
+  // Backtrack
   const matched = [];
   const onlyInExpected = [];
   let i = m, j = n;
@@ -105,15 +107,15 @@ function wordLevelLCS(expected, actual) {
   }
 
   const onlyInActual = [];
-  // 简化：actual 中未match word
+  // Simplification: unmatched words in actual are not extracted precisely yet.
   const matchedActualIndices = new Set(matched.map((_, idx) => idx));
-  // TODO: 更精确  actual-only extract
+  // TODO: more precise extraction of actual-only words
 
   return { matched, onlyInExpected, onlyInActual };
 }
 
 /**
- * C1: 残留fillerdetect
+ * C1: residual filler detection
  */
 function checkResidualFillers(newWords) {
   const issues = [];
@@ -131,7 +133,7 @@ function checkResidualFillers(newWords) {
 }
 
 /**
- * C2: 残留卡顿detect（相邻重复word）
+ * C2: residual stutter detection (adjacent repeated words)
  */
 function checkResidualStutters(newWords) {
   const issues = [];
@@ -139,12 +141,12 @@ function checkResidualStutters(newWords) {
     const prev = (newWords[i - 1].text || newWords[i - 1].word || '').trim();
     const curr = (newWords[i].text || newWords[i].word || '').trim();
     if (prev.length >= STUTTER_MIN_LENGTH && prev === curr) {
-      // 间隔小于 0.5s 才算卡顿
+      // Only counts as a stutter when the gap is under 0.5s
       if (newWords[i].start - newWords[i - 1].end < 0.5) {
         issues.push({
           time: newWords[i - 1].start,
           text: `${prev}${curr}`,
-          context: `重复: "${prev}" × 2`
+          context: `重複："${prev}" × 2`
         });
       }
     }
@@ -153,13 +155,14 @@ function checkResidualStutters(newWords) {
 }
 
 /**
- * C4: content缺失detect（LCS 中预期exists但实际缺失 连续segment）
+ * C4: missing content detection (continuous runs of words present in expected
+ * but absent from the actual transcription via LCS).
  */
 function checkMissingContent(onlyInExpected) {
   const issues = [];
   if (onlyInExpected.length === 0) return issues;
 
-  // merge连续缺失word为segment
+  // Group consecutive missing words into segments
   let currentGroup = [onlyInExpected[0]];
   for (let i = 1; i < onlyInExpected.length; i++) {
     const prev = currentGroup[currentGroup.length - 1];
@@ -188,7 +191,7 @@ function checkMissingContent(onlyInExpected) {
   return issues;
 }
 
-// --- 主逻辑 ---
+// --- Main ---
 
 function main() {
   const opts = parseArgs();
@@ -198,15 +201,15 @@ function main() {
     process.exit(1);
   }
 
-  console.log('Phase C: 语义层质检');
+  console.log('Phase C: 語義層品質檢測');
   console.log('='.repeat(50));
 
-  // readinput
+  // Load inputs
   const newWords = JSON.parse(fs.readFileSync(opts.new_words, 'utf8'));
   const originalWords = JSON.parse(fs.readFileSync(opts.original_words, 'utf8'));
   const deleteSegments = JSON.parse(fs.readFileSync(opts.delete_segments, 'utf8'));
 
-  // extractwordarray（兼容不同format）
+  // Extract word arrays (compatible with multiple input formats)
   const newWordList = Array.isArray(newWords) ? newWords :
     (newWords.words || newWords.subtitles?.flatMap(s => s.words) || []);
   const originalWordList = Array.isArray(originalWords) ? originalWords :
@@ -214,35 +217,35 @@ function main() {
   const segmentList = Array.isArray(deleteSegments) ? deleteSegments :
     (deleteSegments.segments || []);
 
-  // calculate预期keep文本
-  console.log(`sourceword数: ${originalWordList.length}`);
-  console.log(`deletesegment数: ${segmentList.length}`);
+  // Compute expected kept text
+  console.log(`原始字數：${originalWordList.length}`);
+  console.log(`刪除片段數：${segmentList.length}`);
   const expectedKept = computeExpectedText(originalWordList, segmentList);
-  console.log(`预期keepword数: ${expectedKept.length}`);
-  console.log(`重transcribeword数: ${newWordList.length}`);
+  console.log(`預期保留字數：${expectedKept.length}`);
+  console.log(`重新轉錄字數：${newWordList.length}`);
 
-  // C1: 残留filler
+  // C1: residual fillers
   const residualFillers = checkResidualFillers(newWordList);
-  console.log(`\nC1 残留filler: ${residualFillers.length} 个`);
+  console.log(`\nC1 殘留贅詞：${residualFillers.length} 個`);
 
-  // C2: 残留卡顿
+  // C2: residual stutters
   const residualStutters = checkResidualStutters(newWordList);
-  console.log(`C2 残留卡顿: ${residualStutters.length} 个`);
+  console.log(`C2 殘留卡頓：${residualStutters.length} 個`);
 
-  // C3: 语义断裂 — needs Claude 评估，这里只标记切点位置
-  // （by 调use 方  Claude 实例read report 后评估）
-  console.log(`C3 语义断裂: needs  Claude 评估切点上下文`);
+  // C3: semantic breaks — needs Claude evaluation; this script only flags cut points.
+  // (Caller's Claude instance should evaluate after reading the report.)
+  console.log(`C3 語義斷裂：需要 Claude 評估切點上下文`);
 
-  // LCS OK齐
+  // LCS alignment
   const { matched, onlyInExpected } = wordLevelLCS(expectedKept, newWordList);
-  console.log(`\nLCS matchword数: ${matched.length}`);
-  console.log(`预期中缺失word数: ${onlyInExpected.length}`);
+  console.log(`\nLCS 比對字數：${matched.length}`);
+  console.log(`預期中缺失字數：${onlyInExpected.length}`);
 
-  // C4: content缺失
+  // C4: missing content
   const missingContent = checkMissingContent(onlyInExpected);
-  console.log(`C4 content缺失segment: ${missingContent.length} 个`);
+  console.log(`C4 內容缺失片段：${missingContent.length} 個`);
 
-  // generate报告
+  // Build report
   const report = {
     phase: 'C',
     timestamp: new Date().toISOString(),
@@ -256,7 +259,7 @@ function main() {
     checks: {
       residual_fillers: residualFillers,
       residual_stutters: residualStutters,
-      semantic_breaks: [], // by  Claude 填充
+      semantic_breaks: [], // filled in by Claude
       missing_content: missingContent
     },
     summary: {
@@ -266,13 +269,13 @@ function main() {
         MEDIUM: residualFillers.length + residualStutters.length,
         LOW: missingContent.filter(m => m.expected.length <= 10).length
       },
-      note: 'C3 语义断裂needs Claude read切点上下文后评估，不在此脚本中自动detect'
+      note: 'C3 語義斷裂需 Claude 讀取切點上下文後評估，不在此腳本中自動偵測'
     }
   };
 
   fs.writeFileSync(opts.output, JSON.stringify(report, null, 2), 'utf8');
-  console.log(`\n报告已write: ${opts.output}`);
-  console.log(`总Issue数: ${report.summary.total_issues} (HIGH: ${report.summary.by_severity.HIGH}, MEDIUM: ${report.summary.by_severity.MEDIUM})`);
+  console.log(`\n報告已寫入：${opts.output}`);
+  console.log(`總問題數：${report.summary.total_issues} (HIGH: ${report.summary.by_severity.HIGH}, MEDIUM: ${report.summary.by_severity.MEDIUM})`);
 }
 
 main();

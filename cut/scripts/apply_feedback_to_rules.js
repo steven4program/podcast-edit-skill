@@ -1,14 +1,14 @@
 #!/usr/bin/env node
 /**
- * 将feedbackanalyzeresult应use 到use 户  editing_rules
+ * Apply feedback-analysis results to a user's editing_rules.
  *
- * read analyze_feedback.js  output，updateuse 户  editing_rules/ YAML file。
- * 同时record到 learning_history.json。
+ * Reads analyze_feedback.js's output and updates the user's editing_rules/ YAML files.
+ * Also appends to learning_history.json.
  *
  * Usage:
  *   node apply_feedback_to_rules.js <analysis_result.json> [userId]
  *
- *  or 通管道:
+ * Or via pipeline:
  *   node analyze_feedback.js feedback.json | node apply_feedback_to_rules.js - [userId]
  */
 
@@ -16,7 +16,7 @@ const fs = require('fs');
 const path = require('path');
 const UserManager = require('./user_manager');
 
-// --- 激进度调整映射 ---
+// --- Aggressiveness adjustment mapping ---
 
 const AGGRESSIVENESS_LEVELS = ['conservative', 'moderate', 'aggressive'];
 
@@ -33,19 +33,19 @@ function adjustAggressiveness(current, direction) {
   return current;
 }
 
-// --- 应use 调整到 editing_rules ---
+// --- Apply adjustments to editing_rules ---
 
 function applyAdjustments(userId, analysisResult) {
   const adjustments = analysisResult.adjustments || [];
   const applied = [];
 
   for (const adj of adjustments) {
-    // 只应use 高置信度 建议
+    // Only apply high-confidence suggestions
     if (adj.confidence < 0.6) continue;
 
     const ruleName = adj.target_rule;
 
-    // 加载现有 use 户覆盖（e.g.果有）
+    // Load any existing user overrides
     const rules = UserManager.loadEditingRules(userId);
     let existingRule = rules.user_overrides[ruleName] || {};
 
@@ -61,7 +61,7 @@ function applyAdjustments(userId, analysisResult) {
             direction: adj.direction
           };
         } else if (adj.direction === 'increase_detection') {
-          // AI 遗漏filler，增加detect
+          // AI missed fillers — boost detection
           if (!existingRule.additional_patterns) existingRule.additional_patterns = [];
           for (const ex of (adj.examples || [])) {
             if (ex.text && !existingRule.additional_patterns.includes(ex.text)) {
@@ -93,7 +93,7 @@ function applyAdjustments(userId, analysisResult) {
           existingRule.aggressiveness = adjustAggressiveness(
             existingRule.aggressiveness || 'moderate', 'decrease'
           );
-          // record哪些type被度delete
+          // Record which types were over-deleted
           if (!existingRule.over_deleted_types) existingRule.over_deleted_types = [];
           if (adj.feedback_type && !existingRule.over_deleted_types.includes(adj.feedback_type)) {
             existingRule.over_deleted_types.push(adj.feedback_type);
@@ -132,10 +132,10 @@ function applyAdjustments(userId, analysisResult) {
       }
     }
 
-    // 标记来源
+    // Tag the source
     existingRule._source = existingRule._source || 'feedback_learning';
 
-    // saved touse 户  editing_rules
+    // Save to the user's editing_rules
     UserManager.saveEditingRule(userId, ruleName, existingRule);
 
     applied.push({
@@ -146,7 +146,7 @@ function applyAdjustments(userId, analysisResult) {
     });
   }
 
-  // record学习事件
+  // Append a learning event
   if (applied.length > 0) {
     UserManager.appendLearningEvent(userId, {
       type: 'feedback_learning',
@@ -168,36 +168,36 @@ if (require.main === module) {
   if (!inputPath) {
     console.log(`Usage: node apply_feedback_to_rules.js <analysis_result.json> [userId]
 
-将feedbackanalyzeresult应use 到use 户  editing_rules。
+Apply feedback-analysis results to a user's editing_rules.
 
-argument:
-  analysis_result.json   analyze_feedback.js  output（ or use  - 表示 stdin）
-  userId                 use 户 ID（default从环境variableread）
+Args:
+  analysis_result.json   output of analyze_feedback.js (or "-" for stdin)
+  userId                 user ID (defaults to the value from the environment)
 
 Example:
-  # 两步执line
+  # Two-step execution
   node analyze_feedback.js feedback.json > analysis.json
   node apply_feedback_to_rules.js analysis.json lixiang
 
-  # 管道执line
+  # Piped execution
   node analyze_feedback.js feedback.json 2>/dev/null | node apply_feedback_to_rules.js - lixiang`);
     process.exit(1);
   }
 
-  // Supported stdin
+  // Support stdin
   let rawInput;
   if (inputPath === '-') {
     rawInput = fs.readFileSync(0, 'utf8');  // read from stdin
   } else {
     if (!fs.existsSync(inputPath)) {
-      console.error(`❌ file does not exist: ${inputPath}`);
+      console.error(`❌ 檔案不存在：${inputPath}`);
       process.exit(1);
     }
     rawInput = fs.readFileSync(inputPath, 'utf8');
   }
 
   if (!UserManager.userExists(userId)) {
-    console.error(`❌ use 户 "${userId}" 不exists`);
+    console.error(`❌ 使用者 "${userId}" 不存在`);
     process.exit(1);
   }
 
@@ -205,21 +205,21 @@ Example:
   const applied = applyAdjustments(userId, analysisResult);
 
   if (applied.length === 0) {
-    console.error('ℹ️  noneeds应use  调整（所有建议置信度不足 or 无变更）');
+    console.error('ℹ️  無需套用的調整（所有建議置信度不足或無變更）');
     process.exit(0);
   }
 
-  console.error(`\n✅ 已应use  ${applied.length} 条调整到use 户 "${userId}"   editing_rules:`);
+  console.error(`\n✅ 已套用 ${applied.length} 條調整到使用者 "${userId}" 的 editing_rules：`);
   for (const a of applied) {
     const arrow = a.direction.includes('increase') ? '↑' : '↓';
     console.error(`   ${arrow} [${a.rule}] ${a.reason}`);
   }
 
   const configPath = UserManager.getUserConfigPath(userId);
-  console.error(`\n📂 update file: ${configPath}/editing_rules/`);
-  console.error(`📝 学习record: ${configPath}/learning_history.json`);
+  console.error(`\n📂 更新檔案：${configPath}/editing_rules/`);
+  console.error(`📝 學習記錄：${configPath}/learning_history.json`);
 
-  // output应use result到 stdout
+  // Output the apply result to stdout
   console.log(JSON.stringify({ applied, userId }, null, 2));
 }
 

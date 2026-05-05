@@ -1,21 +1,21 @@
 #!/usr/bin/env node
 /**
- * eval_fine_analysis.js — 评估 LLM fine标记质量
+ * eval_fine_analysis.js — evaluate LLM fine-edit annotation quality.
  *
  * Usage:
  *   node eval_fine_analysis.js --gold eval_gold.json --predicted fine_analysis_llm.json
  *
- * input:
- *   --gold       eval_gold.json (by  build_eval_set.js generate)
- *   --predicted  fine_analysis_llm.json  or  fine_analysis.json (LLM output)
+ * Inputs:
+ *   --gold       eval_gold.json (produced by build_eval_set.js)
+ *   --predicted  fine_analysis_llm.json or fine_analysis.json (LLM output)
  *
- * output: 终端报告 + optional eval_report.json
+ * Output: terminal report + optional eval_report.json
  *
- * 评估维度:
- *   1. Recall — gold expected edits 中有multifew被 predicted 覆盖？
- *   2. False Positive Avoidance — gold false_positives 中有multifew被 predicted 避免？
- *   3. Boundary Accuracy — match  edits 中，delete边界whether精确？
- *   4. 按 type 细 min  指标
+ * Evaluation dimensions:
+ *   1. Recall — how many gold expected edits are covered by predictions?
+ *   2. False Positive Avoidance — how many gold false_positives are avoided?
+ *   3. Boundary Accuracy — for matched edits, are the delete boundaries precise?
+ *   4. Per-type breakdown
  */
 
 const fs = require('fs');
@@ -286,29 +286,29 @@ const fpAvoidRate = results.fpAvoidance.total > 0 ? (results.fpAvoidance.avoided
 const precisionRate = precisionResults.total > 0 ? (precisionResults.matched / precisionResults.total * 100).toFixed(1) : 'N/A';
 
 console.log('═══════════════════════════════════════════════════');
-console.log('  📋 fine评估报告');
+console.log('  📋 fine 評估報告');
 console.log('═══════════════════════════════════════════════════');
 console.log();
-console.log(`  Recall (missed detection率):     ${results.recall.caught}/${results.recall.total} caught (${recallRate}%)`);
+console.log(`  Recall (漏抓率):       ${results.recall.caught}/${results.recall.total} caught (${recallRate}%)`);
 console.log(`    ├─ exact match:    ${results.recall.caught - results.recall.partial}`);
-console.log(`    ├─ partial match:  ${results.recall.partial}  ← 边界有偏差但检出`);
-console.log(`    └─ missed:         ${results.recall.missed}  ← 完fullmissed detection`);
+console.log(`    ├─ partial match:  ${results.recall.partial}  ← 有抓到但邊界偏差`);
+console.log(`    └─ missed:         ${results.recall.missed}  ← 完全漏抓`);
 console.log();
-console.log(`  Precision (mislabeled率):    ${precisionResults.matched}/${precisionResults.total} matched (${precisionRate}%)`);
-console.log(`    └─ unmatched preds: ${precisionResults.unmatched}  ← 预测但gold中no`);
+console.log(`  Precision (誤標率):    ${precisionResults.matched}/${precisionResults.total} matched (${precisionRate}%)`);
+console.log(`    └─ unmatched preds: ${precisionResults.unmatched}  ← 預測了但 gold 中沒有`);
 console.log();
-console.log(`  Boundary (边界准确率): ${results.boundary.exact}/${results.boundary.total} exact (${boundaryExactRate}%)`);
-console.log(`    └─ boundary errors: ${results.boundary.partial}  ← 检出但删multi/删few`);
+console.log(`  Boundary (邊界準確率): ${results.boundary.exact}/${results.boundary.total} exact (${boundaryExactRate}%)`);
+console.log(`    └─ boundary errors: ${results.boundary.partial}  ← 有抓到但刪多/刪少`);
 console.log();
-console.log(`  FP Avoidance (误删避免): ${results.fpAvoidance.avoided}/${results.fpAvoidance.total} avoided (${fpAvoidRate}%)`);
-console.log(`    └─ still hitting:  ${results.fpAvoidance.repeated}  ← 已知误删仍在重犯`);
+console.log(`  FP Avoidance (誤刪避免): ${results.fpAvoidance.avoided}/${results.fpAvoidance.total} avoided (${fpAvoidRate}%)`);
+console.log(`    └─ still hitting:  ${results.fpAvoidance.repeated}  ← 已知誤刪仍在重犯`);
 console.log();
-console.log(`  Coverage (潜在覆盖):   ${coverageCount}/${results.recall.total} gold edits have overlapping predictions`);
+console.log(`  Coverage (潛在覆蓋):   ${coverageCount}/${results.recall.total} gold edits have overlapping predictions`);
 console.log();
 
 // By type breakdown
 console.log('───────────────────────────────────────────────────');
-console.log('  按type细 min :');
+console.log('  按 type 細分：');
 console.log('───────────────────────────────────────────────────');
 
 const typeEntries = Object.entries(results.byType).sort((a, b) => b[1].total - a[1].total);
@@ -323,12 +323,12 @@ for (const [type, stats] of typeEntries) {
 if (results.missedDetails.length > 0 && verbose) {
   console.log();
   console.log('───────────────────────────────────────────────────');
-  console.log(`  missed detection详情 (前 30 条):`);
+  console.log(`  漏抓詳情（前 30 條）：`);
   console.log('───────────────────────────────────────────────────');
   for (const m of results.missedDetails.slice(0, 30)) {
     const preview = m.fullSentence.length > 60 ? m.fullSentence.slice(0, 60) + '...' : m.fullSentence;
-    console.log(`  S${m.sentenceIdx} [${m.type}] 漏删 "${m.text}"`);
-    console.log(`    : ${preview}`);
+    console.log(`  S${m.sentenceIdx} [${m.type}] 漏刪 "${m.text}"`);
+    console.log(`    句：${preview}`);
   }
 }
 
@@ -336,12 +336,12 @@ if (results.missedDetails.length > 0 && verbose) {
 if (results.boundaryErrors.length > 0 && verbose) {
   console.log();
   console.log('───────────────────────────────────────────────────');
-  console.log(`  边界Error详情 (前 20 条):`);
+  console.log(`  邊界錯誤詳情（前 20 條）：`);
   console.log('───────────────────────────────────────────────────');
   for (const be of results.boundaryErrors.slice(0, 20)) {
     console.log(`  S${be.sentenceIdx} [${be.type}]`);
-    console.log(`    期望删: "${be.goldText}"`);
-    console.log(`    实际删: "${be.predText}"`);
+    console.log(`    期望刪：${be.goldText}`);
+    console.log(`    實際刪：${be.predText}`);
   }
 }
 
@@ -349,7 +349,7 @@ if (results.boundaryErrors.length > 0 && verbose) {
 if (results.fpDetails.length > 0 && verbose) {
   console.log();
   console.log('───────────────────────────────────────────────────');
-  console.log(`  重犯 误删 (前 15 条):`);
+  console.log(`  重犯誤刪（前 15 條）：`);
   console.log('───────────────────────────────────────────────────');
   for (const fp of results.fpDetails.slice(0, 15)) {
     console.log(`  S${fp.sentenceIdx} restore "${fp.text}" (${fp.restoreType}: ${fp.reason})`);

@@ -52,15 +52,17 @@ Verify: type `/` in Claude Code — `podcast-edit-install`, `podcast-edit-cut`, 
 | Node.js | Run JavaScript scripts | `brew install node` |
 | FFmpeg | Audio processing, CBR re-encode | `brew install ffmpeg` |
 | Python 3 | `cut_audio.py` and other scripts | bundled with macOS, or `brew install python3` |
+| faster-whisper | Local Whisper transcription | `pip install -r cut/scripts/requirements.txt` |
 | DeepFilterNet | Audio noise reduction (polish skill, optional) | `pip install deepfilternet` |
 | librosa | Audio signal analysis (qa skill) | `pip install librosa soundfile` |
-| curl | API calls | system default |
+| curl | Optional API calls | system default |
 
 ```bash
 # macOS
 brew install node ffmpeg
 
 # Python deps
+pip install -r cut/scripts/requirements.txt  # cut skill — local transcription
 pip install librosa soundfile     # qa skill — required
 pip install deepfilternet         # polish skill — optional
 
@@ -74,11 +76,15 @@ ffmpeg -version
 python3 --version
 ```
 
-## Step 2: configure API keys
+## Step 2: configure optional API keys
 
-### Aliyun DashScope (speech recognition — required)
+Local Whisper transcription does not require an API key. Copy `.env.example` only if you use optional services.
+
+### Aliyun DashScope (optional fallback)
 
 Console: https://dashscope.console.aliyun.com/
+
+Use Aliyun only if you prefer FunASR transcription/diarization over local Whisper.
 
 1. Sign up for an Aliyun account.
 2. Activate the "Model Service Lingji" service.
@@ -87,7 +93,7 @@ Console: https://dashscope.console.aliyun.com/
 ```bash
 cd "$SKILL_DIR"
 cp .env.example .env
-# Edit .env and fill in your API key
+# Edit .env and fill in optional API keys
 ```
 
 `.env`:
@@ -112,7 +118,7 @@ Get a key at https://aistudio.google.com/apikey.
 node -v                               # Node.js
 ffmpeg -version                       # FFmpeg
 python3 --version                     # Python 3
-cat "$SKILL_DIR/.env" | grep DASHSCOPE  # API key
+python3 -c "import faster_whisper"    # Local Whisper dependency
 ls -la ~/.claude/skills/ | grep podcast-edit  # registered skills
 ```
 
@@ -124,33 +130,37 @@ If all four show output, you are ready:
 
 ## FAQ
 
-### Q1: where do I get the Aliyun API key?
+### Q1: do I need an Aliyun API key?
+
+No. The default transcription path uses local Whisper through `faster-whisper`.
+
+### Q2: where do I get the Aliyun API key if I use fallback?
 
 Aliyun console → https://dashscope.console.aliyun.com/ → create API key.
 
-### Q2: ffmpeg not found
+### Q3: ffmpeg not found
 
 ```bash
 which ffmpeg
 # If empty: brew install ffmpeg
 ```
 
-### Q3: how long can a podcast be?
+### Q4: how long can a podcast be?
 
 - Verified: 2.5 hours (147 min) processed normally.
-- Aliyun FunASR transcription completes in ~3 min regardless of audio length.
-- No hard limit; no need to chunk long audio.
+- Local Whisper runtime depends on machine speed and model size.
+- No upload size limit for local transcription.
 
-### Q4: does it identify speakers in multi-host conversations?
+### Q5: does it identify speakers in multi-host conversations?
 
-Yes. Aliyun FunASR provides speaker diarization with ~98.8 % accuracy in our tests. You must specify the correct number of speakers when transcribing.
+Single-file local Whisper assigns all words to one speaker label. If each speaker has an isolated, time-aligned track, use `transcribe_whisper_multitrack.py` for reliable speaker labels. Use Aliyun fallback for API diarization when only a mixed recording is available.
 
-### Q5: skills don't show up after registration
+### Q6: skills don't show up after registration
 
 1. Check the symlink: `ls -la ~/.claude/skills/ | grep podcast-edit`.
 2. Check the target exists: `ls "$SKILL_DIR/install/SKILL.md"`.
 3. Restart Claude Code so it rescans `~/.claude/skills/`.
 
-### Q6: how do I add intro/outro music and chapter timestamps?
+### Q7: how do I add intro/outro music and chapter timestamps?
 
 Use the polish skill (`/podcast-edit-polish`): highlight teasers, intro/outro music, chapter timestamps, title suggestions, show notes.

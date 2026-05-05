@@ -1,17 +1,18 @@
 #!/usr/bin/env node
 /**
- * 精修 fine_analysis.json 中标记 _refinePoints  edittime戳。
+ * Refine the edit timestamps marked as _refinePoints in fine_analysis.json.
  *
- * 在 merge_llm_fine.js output fine_analysis.json 后、generate审查页之前执line。
- * 扫描所有edit  _refinePoints，调use  refine_boundaries.py do波形 onset detection，
- * use 精修resultupdate deleteStart/deleteEnd。
+ * Run after merge_llm_fine.js produces fine_analysis.json and before generating
+ * the review page. Scans every edit's _refinePoints, calls refine_boundaries.py
+ * to do waveform onset detection, and updates deleteStart/deleteEnd with the
+ * refined results.
  *
  * Usage:
  *   node refine_fine_analysis.js --analysis-dir <dir> --audio <path>
  *
- * argument:
- *   --analysis-dir   include fine_analysis.json  directory
- *   --audio          sourceaudio filepath
+ * Args:
+ *   --analysis-dir   directory containing fine_analysis.json
+ *   --audio          source audio file path
  */
 
 const fs = require('fs');
@@ -35,12 +36,12 @@ const scriptDir = __dirname;
 const refinePyPath = path.join(scriptDir, 'refine_boundaries.py');
 
 if (!fs.existsSync(fineAnalysisPath)) {
-  console.error(`❌ fine_analysis.json 不exists: ${fineAnalysisPath}`);
+  console.error(`❌ fine_analysis.json 不存在：${fineAnalysisPath}`);
   process.exit(1);
 }
 
 if (!audioPath) {
-  // default尝试找sourceaudio
+  // Default: try to locate the source audio
   const defaultAudio = path.join(analysisDir, '..', '1_transcript', 'audio_seekable.mp3');
   if (fs.existsSync(defaultAudio)) {
     audioPath = defaultAudio;
@@ -49,23 +50,23 @@ if (!audioPath) {
     if (fs.existsSync(defaultAudio2)) {
       audioPath = defaultAudio2;
     } else {
-      console.error('❌ 未指定 --audio，且default audio path does not exist');
+      console.error('❌ 未指定 --audio，且預設音訊路徑不存在');
       process.exit(1);
     }
   }
 }
 
-console.log(`🔍 Refine fine_analysis: onset detection 精修`);
-console.log(`   fine_analysis: ${fineAnalysisPath}`);
-console.log(`   audio: ${audioPath}`);
+console.log(`🔍 Refine fine_analysis：onset detection 精修`);
+console.log(`   fine_analysis：${fineAnalysisPath}`);
+console.log(`   音訊：${audioPath}`);
 
-// 加载 fine_analysis
+// Load fine_analysis
 const data = JSON.parse(fs.readFileSync(fineAnalysisPath, 'utf8'));
 const edits = data.edits || [];
 
-// 收集所有 _refinePoints
+// Collect all _refinePoints
 const allPoints = [];
-const pointToEdit = []; // 追踪each个 point 属于哪个 edit  and  point index
+const pointToEdit = []; // tracks which edit and point index each entry came from
 
 for (let ei = 0; ei < edits.length; ei++) {
   const edit = edits[ei];
@@ -79,17 +80,17 @@ for (let ei = 0; ei < edits.length; ei++) {
 }
 
 if (allPoints.length === 0) {
-  console.log('   no refinement needed 切割点，跳');
+  console.log('   無需精修的切割點，略過');
   process.exit(0);
 }
 
-console.log(`   收集到 ${allPoints.length} 个待精修点`);
+console.log(`   收集到 ${allPoints.length} 個待精修點`);
 
-// 写临时 JSON file
+// Write a temporary JSON file
 const tempPointsPath = path.join(analysisDir, '_refine_points_temp.json');
 fs.writeFileSync(tempPointsPath, JSON.stringify(allPoints));
 
-// 调use  refine_boundaries.py
+// Call refine_boundaries.py
 let results;
 try {
   const cmd = `python3 "${refinePyPath}" --audio "${audioPath}" --points-file "${tempPointsPath}"`;
@@ -100,16 +101,16 @@ try {
   });
   results = JSON.parse(stdout);
 } catch (err) {
-  console.error(`❌ refine_boundaries.py 执lineFailed:`, err.message);
-  // 清理临时file
+  console.error(`❌ refine_boundaries.py 執行失敗：`, err.message);
+  // Clean up the temp file
   try { fs.unlinkSync(tempPointsPath); } catch (e) {}
   process.exit(1);
 }
 
-// 清理临时file
+// Clean up the temp file
 try { fs.unlinkSync(tempPointsPath); } catch (e) {}
 
-// 应use 精修result
+// Apply the refined results
 let applied = 0;
 let skipped = 0;
 
@@ -129,10 +130,10 @@ for (let i = 0; i < results.length; i++) {
     continue;
   }
 
-  // 根据 type updateOK应charactersegment（方向约束：只允许边界向delete区域内部移动）
+  // Update the matching field by type (direction constraint: boundaries only move into the deletion range)
   if (type === 'partial_start' || type === 'filler_start') {
     const oldVal = edit.deleteStart ?? edit.ds ?? 0;
-    // deleteStart 只能往右移（refined >= original）
+    // deleteStart can only move right (refined >= original)
     if (result.refined < oldVal - 0.001) {
       skipped++;
       continue;
@@ -144,7 +145,7 @@ for (let i = 0; i < results.length; i++) {
     console.log(`   ✅ Edit #${edit.idx} ${edit.type}: start ${oldVal.toFixed(4)} → ${result.refined.toFixed(4)} (Δ${(delta * 1000).toFixed(1)}ms)`);
   } else if (type === 'partial_end' || type === 'filler_end') {
     const oldVal = edit.deleteEnd ?? edit.de ?? 0;
-    // deleteEnd 只能往左移（refined <= original）
+    // deleteEnd can only move left (refined <= original)
     if (result.refined > oldVal + 0.001) {
       skipped++;
       continue;
@@ -157,19 +158,19 @@ for (let i = 0; i < results.length; i++) {
   }
 }
 
-console.log(`\n📊 精修result: ${applied} applied, ${skipped} skipped (low confidence or no change)`);
+console.log(`\n📊 精修結果：${applied} applied, ${skipped} skipped (low confidence or no change)`);
 
-// 备份原file
+// Back up the original file
 const backupPath = fineAnalysisPath.replace('.json', '_pre_refine.json');
 fs.copyFileSync(fineAnalysisPath, backupPath);
-console.log(`   备份: ${backupPath}`);
+console.log(`   備份：${backupPath}`);
 
-// 清理 _refinePoints charactersegment（已应use ，不needskeep在output中）
+// Remove _refinePoints fields (already applied; not needed in output)
 for (const edit of edits) {
   delete edit._refinePoints;
 }
 
-// 在 summary 中record精修info
+// Record refinement info in summary
 if (!data.summary) data.summary = {};
 data.summary.onsetDetection = {
   totalPoints: allPoints.length,
@@ -177,6 +178,6 @@ data.summary.onsetDetection = {
   skipped
 };
 
-// 写回
+// Write back
 fs.writeFileSync(fineAnalysisPath, JSON.stringify(data, null, 2));
-console.log(`✅ 已update fine_analysis.json（${applied} 个切割点精修Complete）`);
+console.log(`✅ 已更新 fine_analysis.json（${applied} 個切割點精修完成）`);

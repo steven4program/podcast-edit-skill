@@ -1,24 +1,25 @@
 #!/usr/bin/env node
 /**
- * 从 learned_patterns.json generateuse 户level editing_rules YAML file
+ * Generate user-level editing_rules YAML files from learned_patterns.json.
  *
- * read样本analyzeresult，将statistics规律transform为具体  editing_rules 覆盖file。
- * generate file会叠加到globalbase rules之上。
+ * Reads sample-analysis results and turns the statistical patterns into concrete
+ * editing_rules overrides. The generated files are layered on top of the global
+ * base rules.
  *
  * Usage:
  *   node generate_rule_overrides.js <learned_patterns.json> [userId]
  *
- * output:
- *   user preferences/[userId]/editing_rules/filler_words.yaml
- *   user preferences/[userId]/editing_rules/silence.yaml
- *   user preferences/[userId]/editing_rules/content_analysis.yaml
+ * Output:
+ *   user-prefs/<userId>/editing_rules/filler_words.yaml
+ *   user-prefs/<userId>/editing_rules/silence.yaml
+ *   user-prefs/<userId>/editing_rules/content_analysis.yaml
  */
 
 const fs = require('fs');
 const path = require('path');
 const UserManager = require('./user_manager');
 
-// --- 激进度到数值 映射 ---
+// --- Aggressiveness → numeric values ---
 
 const AGGRESSIVENESS_MAP = {
   conservative: { filler_base_rate: 0.3, silence_threshold: 4.0, content_reduction: 0.15 },
@@ -26,7 +27,7 @@ const AGGRESSIVENESS_MAP = {
   aggressive:   { filler_base_rate: 0.8, silence_threshold: 2.0, content_reduction: 0.40 }
 };
 
-// --- generate filler_words 覆盖 ---
+// --- Generate filler_words override ---
 
 function generateFillerWordsOverride(patterns) {
   const analysis = patterns.filler_word_analysis || {};
@@ -57,7 +58,7 @@ function generateFillerWordsOverride(patterns) {
   };
 }
 
-// --- generate silence 覆盖 ---
+// --- Generate silence override ---
 
 function generateSilenceOverride(patterns) {
   const silenceAnalysis = patterns.silence_analysis || {};
@@ -72,7 +73,7 @@ function generateSilenceOverride(patterns) {
   };
 }
 
-// --- generate content_analysis 覆盖 ---
+// --- Generate content_analysis override ---
 
 function generateContentAnalysisOverride(patterns) {
   const summary = patterns.summary || {};
@@ -102,28 +103,28 @@ function generateOverrides(patternsPath, userId) {
   const silence = generateSilenceOverride(patterns);
   const contentAnalysis = generateContentAnalysisOverride(patterns);
 
-  // saved touse 户  editing_rules directory
+  // Save into the user's editing_rules directory
   UserManager.saveEditingRule(userId, 'filler_words', fillerWords);
   UserManager.saveEditingRule(userId, 'silence', silence);
   UserManager.saveEditingRule(userId, 'content_analysis', contentAnalysis);
 
-  // 同时update preferences.yaml  激进度（e.g.果样本analyze result and 现有不同）
+  // Also update preferences.yaml's aggressiveness (when sample analysis differs from current)
   const prefs = UserManager.loadPreferences(userId);
   if (prefs && patterns.aggressiveness) {
     const currentAgg = prefs.duration && prefs.duration.aggressiveness;
     if (currentAgg !== patterns.aggressiveness) {
-      console.error(`\n💡 建议: 根据样本analyze，激进度应为 "${patterns.aggressiveness}"（current: "${currentAgg}"）`);
-      console.error(`   可通edit preferences.yaml   duration.aggressiveness update`);
+      console.error(`\n💡 建議：根據樣本分析，激進度應為 "${patterns.aggressiveness}"（目前：${currentAgg}）`);
+      console.error(`   可透過編輯 preferences.yaml 的 duration.aggressiveness 更新`);
     }
   }
 
   const configPath = UserManager.getUserConfigPath(userId);
-  console.error(`\n✅ Generated editing_rules 覆盖file:`);
+  console.error(`\n✅ 已產生 editing_rules 覆寫檔案：`);
   console.error(`   ${configPath}/editing_rules/filler_words.yaml`);
   console.error(`   ${configPath}/editing_rules/silence.yaml`);
   console.error(`   ${configPath}/editing_rules/content_analysis.yaml`);
 
-  // record学习事件
+  // Append a learning event
   UserManager.appendLearningEvent(userId, {
     type: 'sample_learning',
     patterns_file: patternsPath,
@@ -144,7 +145,7 @@ if (require.main === module) {
   if (!patternsPath) {
     console.log(`Usage: node generate_rule_overrides.js <learned_patterns.json> [userId]
 
-从样本analyzeresultgenerateuse 户level editing_rules 覆盖file。
+Generate user-level editing_rules overrides from sample-analysis results.
 
 Example:
   node generate_rule_overrides.js learned_patterns.json lixiang`);
@@ -152,12 +153,12 @@ Example:
   }
 
   if (!fs.existsSync(patternsPath)) {
-    console.error(`❌ file does not exist: ${patternsPath}`);
+    console.error(`❌ 檔案不存在：${patternsPath}`);
     process.exit(1);
   }
 
   if (!UserManager.userExists(userId)) {
-    console.error(`❌ use 户 "${userId}" 不exists，Please 先创建: node user_manager.js create ${userId}`);
+    console.error(`❌ 使用者 "${userId}" 不存在，請先建立：node user_manager.js create ${userId}`);
     process.exit(1);
   }
 

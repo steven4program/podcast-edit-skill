@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
-Layer 2: AI 听感评估 — use  Gemini Audio API 评估edit质量
+Layer 2: AI listening evaluation — uses the Gemini Audio API to assess edit quality.
 
-两种采样策略：
-1. global采样 — 等间隔抽取 6 个 30s segment，评估整体节奏 and 风格一致性
-2. 可疑segment复查 — OK Layer 1 标记  HIGH Issuesegmentdo AI 二次confirm，减few误报
+Two sampling strategies:
+1. Global sampling — extract 6 evenly-spaced 30s clips to evaluate overall pacing
+   and stylistic consistency.
+2. Suspicious-clip review — pick HIGH severity issues flagged by Layer 1 and ask
+   the AI for a second opinion to cut down on false positives.
 
-needs GEMINI_API_KEY 环境variable。
+Requires the GEMINI_API_KEY environment variable.
 
-Usage：
+Usage:
     python3 ai_listen.py --input podcast.mp3 --signal-report qa_signal_report.json --output qa_ai_report.json
-    python3 ai_listen.py --input podcast.mp3 --output qa_ai_report.json   # 无 Layer 1 报告，仅global采样
+    python3 ai_listen.py --input podcast.mp3 --output qa_ai_report.json   # no Layer 1 report → global sampling only
 """
 
 import argparse
@@ -26,7 +28,7 @@ from pathlib import Path
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
-# Gemini prompt 模板（按 SKILL.md 定义）
+# Gemini prompt templates (defined per SKILL.md)
 EVAL_PROMPT_GLOBAL = """You are a professional podcast editor evaluating audio quality.
 Listen carefully to this 30-second clip from a Chinese podcast and evaluate:
 
@@ -74,7 +76,7 @@ Respond in this exact JSON format (no markdown):
 
 
 def extract_clip(input_path, start, duration, output_path):
-    """use  ffmpeg atrim extractaudiosegment为 WAV"""
+    """Use ffmpeg's atrim to extract an audio segment as WAV."""
     cmd = [
         'ffmpeg', '-v', 'quiet',
         '-i', input_path,
@@ -89,7 +91,7 @@ def extract_clip(input_path, start, duration, output_path):
 
 
 def call_gemini(client, model, audio_bytes, prompt, max_retries=3):
-    """调use  Gemini API 评估audiosegment，带重试"""
+    """Call the Gemini API to evaluate an audio clip, with retries."""
     from google.genai import types
 
     for attempt in range(max_retries):
@@ -120,17 +122,17 @@ def call_gemini(client, model, audio_bytes, prompt, max_retries=3):
 
 
 def parse_json_response(text):
-    """从 Gemini 返回 文本中extract JSON"""
+    """Extract JSON from a Gemini response."""
     if not text:
         return None
 
-    # 尝试直接解析
+    # Try direct parsing first
     try:
         return json.loads(text)
     except json.JSONDecodeError:
         pass
 
-    # 尝试从 markdown 代码block中extract
+    # Try extracting from a markdown code block
     match = re.search(r'```(?:json)?\s*\n(.*?)\n```', text, re.DOTALL)
     if match:
         try:
@@ -138,7 +140,7 @@ def parse_json_response(text):
         except json.JSONDecodeError:
             pass
 
-    # 尝试找到 JSON OK象
+    # Try locating a bare JSON object
     match = re.search(r'\{.*\}', text, re.DOTALL)
     if match:
         try:
@@ -150,12 +152,12 @@ def parse_json_response(text):
 
 
 def get_global_sample_times(duration, n_samples=6, clip_duration=30):
-    """calculateglobal等间隔采样点"""
+    """Compute evenly-spaced global sample positions."""
     if duration < clip_duration * 2:
-        # audio太短，只采一个中间点
+        # Audio is too short — sample a single clip near the middle
         return [max(0, duration / 2 - clip_duration / 2)]
 
-    # 去掉头尾各 10%，在中间 80% 等间隔采样
+    # Drop 10% off each end and sample evenly across the middle 80%
     margin = duration * 0.1
     usable = duration - 2 * margin
     step = usable / (n_samples + 1)
@@ -170,14 +172,14 @@ def get_global_sample_times(duration, n_samples=6, clip_duration=30):
 
 
 def get_suspicious_clips(signal_report, max_clips=10):
-    """从 Layer 1 报告中extract最严重  HIGH issues"""
+    """Pull the most severe HIGH issues from the Layer 1 report."""
     issues = signal_report.get('issues', [])
     high_issues = [i for i in issues if i.get('severity') == 'high']
 
-    # 按 metric sort（能量比越高越可疑）
+    # Sort by metric (higher energy ratio is more suspicious)
     high_issues.sort(key=lambda x: x.get('metric', 0), reverse=True)
 
-    # 去重（相邻 5s 内 只keep最严重 ）
+    # Dedupe — within 5s of each other, keep only the most severe
     filtered = []
     for issue in high_issues:
         t = issue['timestamp']
@@ -190,7 +192,7 @@ def get_suspicious_clips(signal_report, max_clips=10):
 
 
 def format_time(seconds):
-    """format化time为 MM:SS"""
+    """Format seconds as MM:SS (or H:MM:SS for long durations)."""
     m, s = divmod(int(seconds), 60)
     if m >= 60:
         h, m = divmod(m, 60)
@@ -208,15 +210,15 @@ def main():
     parser.add_argument("--max-suspicious", type=int, default=10, help="Max suspicious clips to review (default: 10)")
     args = parser.parse_args()
 
-    # 检查inputfile
+    # Verify input file
     if not Path(args.input).exists():
-        print(f"❌ not foundaudio file: {args.input}")
+        print(f"❌ 找不到音訊檔案：{args.input}")
         sys.exit(1)
 
-    # 检查 API Key
+    # Check API key
     api_key = os.environ.get('GEMINI_API_KEY')
     if not api_key:
-        # 尝试从 .env fileread
+        # Try reading from the .env file
         env_path = Path(__file__).resolve().parent.parent.parent / '.env'
         if env_path.exists():
             with open(env_path) as f:
@@ -227,43 +229,43 @@ def main():
                         break
 
     if not api_key:
-        print("❌ not found GEMINI_API_KEY")
-        print("   设置method:")
+        print("❌ 找不到 GEMINI_API_KEY")
+        print("   設定方式：")
         print("   1. export GEMINI_API_KEY='your-key'")
-        print("   2.  or 在 .env file中添加 GEMINI_API_KEY=your-key")
+        print("   2. 或在 .env 檔案中加入 GEMINI_API_KEY=your-key")
         sys.exit(1)
 
-    # 初始化 Gemini client
+    # Initialise the Gemini client
     print("🤖 初始化 Gemini API...")
     from google import genai
     client = genai.Client(api_key=api_key)
 
-    # 获取audioduration
+    # Get audio duration
     result = subprocess.run(
         ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
          '-of', 'default=noprint_wrappers=1:nokey=1', args.input],
         capture_output=True, text=True
     )
     duration = float(result.stdout.strip())
-    print(f"📊 audio: {Path(args.input).name}")
-    print(f"   duration: {format_time(duration)} ({duration:.1f}s)")
-    print(f"   模型: {args.model}")
+    print(f"📊 音訊：{Path(args.input).name}")
+    print(f"   長度：{format_time(duration)} ({duration:.1f}s)")
+    print(f"   模型：{args.model}")
     print()
 
-    # read Layer 1 报告（e.g.有）
+    # Load Layer 1 report if available
     signal_report = None
     if args.signal_report and Path(args.signal_report).exists():
         with open(args.signal_report) as f:
             signal_report = json.load(f)
         high_count = signal_report.get('summary', {}).get('high', 0)
-        print(f"📋 Layer 1 报告: {signal_report.get('summary', {}).get('total_issues', 0)} issues ({high_count} HIGH)")
+        print(f"📋 Layer 1 報告：{signal_report.get('summary', {}).get('total_issues', 0)} 個問題（{high_count} 個 HIGH）")
 
     evaluations = []
 
-    # ===== 策略 1: global采样 =====
-    print(f"\n🎧 策略 1: global采样 ({args.global_samples} 个 30s segment)")
+    # ===== Strategy 1: global sampling =====
+    print(f"\n🎧 策略 1：全域取樣（{args.global_samples} 個 30s 片段）")
     sample_times = get_global_sample_times(duration, args.global_samples, 30)
-    print(f"   采样点: {', '.join(format_time(t) for t in sample_times)}")
+    print(f"   取樣點：{', '.join(format_time(t) for t in sample_times)}")
 
     with tempfile.TemporaryDirectory() as tmpdir:
         for idx, start in enumerate(sample_times):
@@ -274,7 +276,7 @@ def main():
             print(f"   [{idx + 1}/{len(sample_times)}] {format_time(start)}-{format_time(end)} ...", end=" ", flush=True)
 
             if not extract_clip(args.input, start, clip_dur, clip_path):
-                print("⚠️ extractFailed，跳")
+                print("⚠️ 擷取失敗，略過")
                 continue
 
             with open(clip_path, 'rb') as f:
@@ -284,7 +286,7 @@ def main():
             parsed = parse_json_response(response_text)
 
             if parsed:
-                # 将segment内 time偏移convert为globaltime
+                # Convert clip-relative offsets to global time
                 issues = []
                 for issue in parsed.get('issues', []):
                     issues.append({
@@ -304,7 +306,7 @@ def main():
                 verdict_emoji = {"pass": "✅", "review_recommended": "⚠️", "redo_recommended": "❌"}.get(eval_entry['verdict'], "❓")
                 print(f"{verdict_emoji} score={eval_entry['transition_score']}/10, {len(issues)} issues")
             else:
-                print("⚠️ 解析Failed")
+                print("⚠️ 解析失敗")
                 evaluations.append({
                     "strategy": "global_sampling",
                     "clip_range": [round(start, 1), round(end, 1)],
@@ -314,11 +316,11 @@ def main():
                     "raw_response": (response_text or "")[:500]
                 })
 
-        # ===== 策略 2: 可疑segment复查 =====
+        # ===== Strategy 2: suspicious-clip review =====
         if signal_report:
             suspicious = get_suspicious_clips(signal_report, args.max_suspicious)
             if suspicious:
-                print(f"\n🔍 策略 2: 可疑segment复查 ({len(suspicious)} 个 10s segment)")
+                print(f"\n🔍 策略 2：可疑片段複查（{len(suspicious)} 個 10s 片段）")
 
                 for idx, issue in enumerate(suspicious):
                     t = issue['timestamp']
@@ -330,7 +332,7 @@ def main():
                     print(f"   [{idx + 1}/{len(suspicious)}] {format_time(t)} ({issue['detail'][:40]}) ...", end=" ", flush=True)
 
                     if not extract_clip(args.input, start, clip_dur, clip_path):
-                        print("⚠️ extractFailed，跳")
+                        print("⚠️ 擷取失敗，略過")
                         continue
 
                     with open(clip_path, 'rb') as f:
@@ -361,15 +363,15 @@ def main():
                         evaluations.append(eval_entry)
 
                         emoji = "⚠️" if is_real else "✅"
-                        print(f"{emoji} {'realIssue' if is_real else '误报'}: {parsed.get('explanation', '')[:50]}")
+                        print(f"{emoji} {'真實問題' if is_real else '誤報'}：{parsed.get('explanation', '')[:50]}")
                     else:
-                        print("⚠️ 解析Failed")
+                        print("⚠️ 解析失敗")
             else:
-                print("\n🔍 策略 2: 无 HIGH levelIssueneeds复查")
+                print("\n🔍 策略 2：沒有 HIGH 級別問題需要複查")
         else:
-            print("\n🔍 策略 2: 未提供 Layer 1 报告，跳可疑segment复查")
+            print("\n🔍 策略 2：未提供 Layer 1 報告，略過可疑片段複查")
 
-    # ===== calculate综合 AI 评 min  =====
+    # ===== Compute combined AI score =====
     global_scores = [e['transition_score'] for e in evaluations
                      if e['strategy'] == 'global_sampling' and e.get('transition_score') is not None]
 
@@ -380,11 +382,11 @@ def main():
     ai_score = 5.0  # default
     if global_scores:
         ai_score = round(sum(global_scores) / len(global_scores), 1)
-        # e.g.果有confirm realIssue，扣 min 
+        # If any real issues were confirmed, deduct points
         if confirmed > 0:
             ai_score = max(1.0, round(ai_score - confirmed * 0.5, 1))
 
-    # statistics
+    # Stats
     verdicts = [e.get('verdict', 'unknown') for e in evaluations if e['strategy'] == 'global_sampling']
     summary = {
         "total_clips": len(evaluations),
@@ -406,27 +408,27 @@ def main():
         "summary": summary,
     }
 
-    # save报告
+    # Save report
     with open(args.output, 'w', encoding='utf-8') as f:
         json.dump(report, f, ensure_ascii=False, indent=2)
 
-    # 打印摘要
+    # Print summary
     print(f"\n{'='*50}")
-    print(f"AI 听感评估报告")
+    print(f"AI 聽感評估報告")
     print(f"{'='*50}")
-    print(f"audio: {report['audio_file']}")
-    print(f"模型: {args.model}")
-    print(f"AI 评 min : {ai_score} / 10")
+    print(f"音訊：{report['audio_file']}")
+    print(f"模型：{args.model}")
+    print(f"AI 評分：{ai_score} / 10")
     print()
-    print(f"global采样: {summary['global_clips']} segment")
+    print(f"全域取樣：{summary['global_clips']} 個片段")
     print(f"  ✅ Pass: {summary['pass']}")
     print(f"  ⚠️ Review: {summary['review']}")
     print(f"  ❌ Redo: {summary['redo']}")
     if suspicious_evals:
-        print(f"可疑复查: {summary['suspicious_clips']} segment")
-        print(f"  ✅ 误报: {summary['false_positives']}")
-        print(f"  ⚠️ confirm: {summary['confirmed_issues']}")
-    print(f"\n报告saved: {args.output}")
+        print(f"可疑複查：{summary['suspicious_clips']} 個片段")
+        print(f"  ✅ 誤報：{summary['false_positives']}")
+        print(f"  ⚠️ 確認：{summary['confirmed_issues']}")
+    print(f"\n報告已儲存：{args.output}")
 
 
 if __name__ == "__main__":

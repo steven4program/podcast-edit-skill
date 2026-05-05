@@ -1,24 +1,26 @@
 #!/usr/bin/env python3
 """
-edit样本analyze器 — 从edit前后audioOK比中extractedit偏good
+Edit-sample analyser — extract editing preferences by comparing the source and
+final versions of the same audio.
 
-通OK比source录音 and 已发布 editversion，自动identifyuse 户 edit风格：
-- fillerdelete率
-- silence segmentprocessthreshold
-- contentblock删减激进度
-- 重复/口误process方式
+By comparing the source recording with the published cut, automatically infer
+the user's editing style:
+- filler-word deletion rate
+- silence-segment processing threshold
+- aggressiveness of content-block trimming
+- handling of repetitions / verbal slips
 
 Usage:
     python3 analyze_editing_samples.py \\
-        --before /path/to/source录音.mp3 \\
-        --after /path/to/发布version.mp3 \\
+        --before /path/to/source.mp3 \\
+        --after /path/to/published.mp3 \\
         --before-transcript /path/to/before_transcript.json \\
         --after-transcript /path/to/after_transcript.json \\
         --output /path/to/learned_patterns.json
 
-e.g.果no提供 transcript，会Tip使use 阿里云 FunASR 先transcribe。
+If no transcripts are provided, the script will prompt to transcribe via Aliyun FunASR first.
 
-依赖: pip install librosa numpy
+Dependencies: pip install librosa numpy
 """
 
 import argparse
@@ -29,31 +31,32 @@ from pathlib import Path
 from difflib import SequenceMatcher
 from collections import Counter, defaultdict
 
-# --- filler and tone words定义 ---
+# --- Filler / tone-word definitions ---
+# NOTE: matched against simplified-Chinese FunASR output — keep entries in simplified Chinese.
 
 FILLER_WORDS = {
-    '嗯', '啊', '呃', '额', '哦', '噢',
-    '就是', '然后', '那个', '这个', '所以',
-    'OKOKOK', 'OKOK', '是是是',
+    '嗯', '啊', '呃', '額', '哦', '噢',
+    '就是', '然後', '那個', '這個', '所以',
+    '那那那', '那那', '是是是',
     '哈哈', '哈哈哈', '嗯嗯', '嗯嗯嗯',
     '啊啊', '呃呃'
 }
 
 STUTTER_PATTERNS = [
-    r'(.{1,3})\1{1,}',  # 连续重复，e.g."那那那"
+    r'(.{1,3})\1{1,}',  # consecutive repetition, e.g. "那那那"
 ]
 
-# --- 文本预process ---
+# --- Text preprocessing ---
 
 def normalize_text(text):
-    """标准化文本use 于OK齐"""
+    """Normalize text for alignment."""
     text = text.strip()
-    text = re.sub(r'\s+', '', text)  # 移除所有空格
-    text = re.sub(r'[，。！？、；：""''（）【】]', '', text)  # 移除标点
+    text = re.sub(r'\s+', '', text)  # remove all whitespace
+    text = re.sub(r'[，。！？、；：""''（）【】]', '', text)  # remove punctuation
     return text
 
 def extract_sentences_from_transcript(transcript_data):
-    """从transcribe JSON extractsentencecolumn表"""
+    """Extract a sentence list from a transcription JSON."""
     sentences = []
 
     if isinstance(transcript_data, list):
@@ -75,7 +78,7 @@ def extract_sentences_from_transcript(transcript_data):
                     current_sentence = []
                 current_speaker = word.get('speaker', '')
             elif word.get('isGap'):
-                # silence segment，检查duration
+                # silence segment — inspect duration
                 gap_duration = word.get('end', 0) - word.get('start', 0)
                 if gap_duration > 0.5 and current_sentence:
                     text = ''.join(w['text'] for w in current_sentence)
@@ -102,7 +105,7 @@ def extract_sentences_from_transcript(transcript_data):
             })
 
     elif isinstance(transcript_data, dict):
-        # 阿里云sourceformat
+        # Aliyun source format
         for transcript in transcript_data.get('transcripts', []):
             for sent in transcript.get('sentences', []):
                 sentences.append({
@@ -116,18 +119,18 @@ def extract_sentences_from_transcript(transcript_data):
     return sentences
 
 
-# --- 文本OK齐 and 差异analyze ---
+# --- Text alignment and diff analysis ---
 
 def align_transcripts(before_sentences, after_sentences):
-    """OK齐edit前后 transcribe文本，找出被delete 部 min """
+    """Align before/after transcripts and find what was deleted."""
     before_text = [normalize_text(s['text']) for s in before_sentences]
     after_text = [normalize_text(s['text']) for s in after_sentences]
 
-    # 使use  SequenceMatcher 找到最长公total子序column
+    # Use SequenceMatcher to find the longest common subsequence
     matcher = SequenceMatcher(None, before_text, after_text)
 
-    kept = []      # keep sentenceindex（before 侧）
-    deleted = []   # 被delete sentenceindex（before 侧）
+    kept = []      # kept sentence indices (before side)
+    deleted = []   # deleted sentence indices (before side)
 
     for op, i1, i2, j1, j2 in matcher.get_opcodes():
         if op == 'equal':
@@ -137,9 +140,9 @@ def align_transcripts(before_sentences, after_sentences):
             for i in range(i1, i2):
                 deleted.append(i)
         elif op == 'replace':
-            # replace 可能是部 min match，尝试细粒度OK齐
+            # `replace` may be a partial match — try fine-grained alignment
             for i in range(i1, i2):
-                # 检查 before[i] whether在 after[j1:j2] 中有近似match
+                # Check whether before[i] has a fuzzy match in after[j1:j2]
                 best_ratio = 0
                 for j in range(j1, j2):
                     ratio = SequenceMatcher(None, before_text[i], after_text[j]).ratio()
@@ -153,45 +156,45 @@ def align_transcripts(before_sentences, after_sentences):
 
 
 def classify_deletion(sentence, before_sentences, idx, deleted_indices):
-    """OKdelete sentence进line min 类"""
+    """Classify a deleted sentence."""
     text = sentence['text']
     normalized = normalize_text(text)
 
-    # 检查whether为纯filler
+    # Pure filler?
     if normalized in FILLER_WORDS or len(normalized) <= 2 and normalized in {'嗯', '啊', '呃', '哦'}:
         return 'filler_word', text
 
-    # 检查whether为卡顿/重复
+    # Stutter / repetition?
     for pattern in STUTTER_PATTERNS:
         if re.search(pattern, normalized):
             return 'stutter', text
 
-    # 检查whether为短（可能是residual sentence）
+    # Short (possibly a residual sentence)?
     if len(normalized) < 5:
         return 'residual', text
 
-    # 检查whether为连续delete（contentblock）
+    # Part of a consecutive block deletion?
     neighbors_deleted = sum(1 for d in deleted_indices
                             if abs(d - idx) <= 3 and d != idx)
     if neighbors_deleted >= 2:
         return 'content_block', text
 
-    # 检查silence segment后 delete
+    # Deletion right after a silence segment?
     if sentence.get('gap_after', 0) > 2.0:
         return 'silence_related', text
 
-    # default min 类
+    # Default
     return 'other', text
 
 
-# --- statisticsanalyze ---
+# --- Statistical analysis ---
 
 def analyze_patterns(before_sentences, kept, deleted):
-    """从delete模式中extractstatistics规律"""
+    """Extract statistical patterns from the deletion data."""
     total = len(before_sentences)
     deleted_set = set(deleted)
 
-    # statistics各类delete
+    # Tally deletions per category
     deletion_types = defaultdict(list)
     filler_stats = Counter()
     filler_total = Counter()
@@ -200,7 +203,7 @@ def analyze_patterns(before_sentences, kept, deleted):
         sentence = before_sentences[idx]
         text = normalize_text(sentence['text'])
 
-        # statisticsfillertotal count
+        # Total filler counts
         for fw in FILLER_WORDS:
             count = text.count(fw)
             if count > 0:
@@ -214,13 +217,13 @@ def analyze_patterns(before_sentences, kept, deleted):
                 'duration': sentence.get('end', 0) - sentence.get('start', 0)
             })
 
-            # statistics被delete filler
+            # Count fillers actually deleted
             for fw in FILLER_WORDS:
                 count = text.count(fw)
                 if count > 0:
                     filler_stats[fw] += count
 
-    # calculatefillerdelete率
+    # Compute filler deletion rates
     filler_deletion_rates = {}
     for fw in filler_total:
         total_count = filler_total[fw]
@@ -233,7 +236,7 @@ def analyze_patterns(before_sentences, kept, deleted):
                 'rate': round(rate, 2)
             }
 
-    # 估计silencethreshold
+    # Estimate silence threshold
     silence_durations = []
     for idx in deleted_set:
         gap = before_sentences[idx].get('gap_after', 0)
@@ -244,7 +247,7 @@ def analyze_patterns(before_sentences, kept, deleted):
     if silence_durations:
         silence_threshold = round(min(silence_durations), 1)
 
-    # calculatedurationstatistics
+    # Duration stats
     before_duration = max(s.get('end', 0) for s in before_sentences) if before_sentences else 0
     deleted_duration = sum(
         before_sentences[i].get('end', 0) - before_sentences[i].get('start', 0)
@@ -274,7 +277,7 @@ def analyze_patterns(before_sentences, kept, deleted):
         'silence_analysis': {
             'estimated_threshold': silence_threshold,
             'deleted_silence_count': len(silence_durations),
-            'silence_durations': sorted(silence_durations)[:10]  # 前 10 个
+            'silence_durations': sorted(silence_durations)[:10]  # top 10
         },
         'aggressiveness': classify_aggressiveness(len(deleted) / total if total > 0 else 0),
         'recommendations': generate_recommendations(
@@ -286,7 +289,7 @@ def analyze_patterns(before_sentences, kept, deleted):
 
 
 def classify_aggressiveness(deletion_rate):
-    """根据delete率判断激进度"""
+    """Classify aggressiveness from the deletion rate."""
     if deletion_rate < 0.15:
         return 'conservative'
     elif deletion_rate < 0.30:
@@ -296,10 +299,10 @@ def classify_aggressiveness(deletion_rate):
 
 
 def generate_recommendations(filler_rates, silence_threshold, deletion_rate, deletion_types):
-    """generate editing_rules 建议"""
+    """Generate editing_rules recommendations."""
     recs = []
 
-    # filler建议
+    # Filler recommendations
     high_delete = [fw for fw, data in filler_rates.items() if data['rate'] > 0.6]
     low_delete = [fw for fw, data in filler_rates.items() if data['rate'] < 0.3]
 
@@ -309,7 +312,7 @@ def generate_recommendations(filler_rates, silence_threshold, deletion_rate, del
             'action': 'set_high_deletion',
             'words': high_delete,
             'confidence': 0.85,
-            'reason': f'这些filler在样本中被delete超 60%: {", ".join(high_delete)}'
+            'reason': f'這些贅詞在樣本中被刪除超過 60%：{", ".join(high_delete)}'
         })
 
     if low_delete:
@@ -318,26 +321,26 @@ def generate_recommendations(filler_rates, silence_threshold, deletion_rate, del
             'action': 'preserve',
             'words': low_delete,
             'confidence': 0.80,
-            'reason': f'这些filler在样本中大multi被keep: {", ".join(low_delete)}'
+            'reason': f'這些贅詞在樣本中大多保留：{", ".join(low_delete)}'
         })
 
-    # silencethreshold建议
+    # Silence threshold recommendation
     if silence_threshold:
         recs.append({
             'rule': 'silence',
             'action': 'set_threshold',
             'value': silence_threshold,
             'confidence': 0.75,
-            'reason': f'样本中delete 最短silence segment为 {silence_threshold}s'
+            'reason': f'樣本中被刪除的最短靜音片段為 {silence_threshold}s'
         })
 
-    # 激进度建议
+    # Aggressiveness recommendation
     recs.append({
         'rule': 'aggressiveness',
         'action': 'set',
         'value': classify_aggressiveness(deletion_rate),
         'confidence': 0.90,
-        'reason': f'样本总体delete率 {deletion_rate:.0%}'
+        'reason': f'樣本整體刪除率 {deletion_rate:.0%}'
     })
 
     return recs
@@ -347,78 +350,78 @@ def generate_recommendations(filler_rates, silence_threshold, deletion_rate, del
 
 def main():
     parser = argparse.ArgumentParser(
-        description='从edit前后audioOK比中extractedit偏good',
+        description='Extract editing preferences by comparing before/after audio',
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Example:
-  # 使use 已有transcribe
+  # Use pre-existing transcripts
   python3 analyze_editing_samples.py \\
       --before-transcript before_words.json \\
       --after-transcript after_words.json \\
       --output learned_patterns.json
 
-  # 完整flow（needs 先use 阿里云transcribe两个audio）
+  # Full flow (transcribe both audios via Aliyun first)
   python3 analyze_editing_samples.py \\
-      --before source录音.mp3 \\
-      --after 发布version.mp3 \\
+      --before source.mp3 \\
+      --after published.mp3 \\
       --output learned_patterns.json
         """
     )
-    parser.add_argument('--before', help='sourceaudio filepath')
-    parser.add_argument('--after', help='edit后audio filepath')
-    parser.add_argument('--before-transcript', help='sourceaudio transcribe JSON')
-    parser.add_argument('--after-transcript', help='edit后audio transcribe JSON')
+    parser.add_argument('--before', help='source audio file path')
+    parser.add_argument('--after', help='edited audio file path')
+    parser.add_argument('--before-transcript', help='source-audio transcription JSON')
+    parser.add_argument('--after-transcript', help='edited-audio transcription JSON')
     parser.add_argument('--output', required=True, help='output learned_patterns.json path')
 
     args = parser.parse_args()
 
-    # 检查input
+    # Check inputs
     if not args.before_transcript or not args.after_transcript:
         if args.before and args.after:
-            print("⚠️  未提供transcribefile。Please 先使use 阿里云 FunASR transcribe两个audio：", file=sys.stderr)
-            print(f"   1. transcribesourceaudio: {args.before}", file=sys.stderr)
-            print(f"   2. transcribeeditversion: {args.after}", file=sys.stderr)
-            print("   3. 将两个 subtitles_words.json  min 别传入 --before-transcript  and  --after-transcript", file=sys.stderr)
+            print("⚠️  未提供轉錄檔案。請先使用阿里雲 FunASR 轉錄兩個音訊：", file=sys.stderr)
+            print(f"   1. 轉錄原始音訊：{args.before}", file=sys.stderr)
+            print(f"   2. 轉錄剪輯版本：{args.after}", file=sys.stderr)
+            print("   3. 將兩個 subtitles_words.json 分別傳入 --before-transcript 與 --after-transcript", file=sys.stderr)
             sys.exit(1)
         else:
             parser.print_help()
             sys.exit(1)
 
-    # 加载transcribe
-    print("📖 加载transcribefile...", file=sys.stderr)
+    # Load transcripts
+    print("📖 載入轉錄檔案...", file=sys.stderr)
     with open(args.before_transcript, 'r', encoding='utf-8') as f:
         before_data = json.load(f)
     with open(args.after_transcript, 'r', encoding='utf-8') as f:
         after_data = json.load(f)
 
-    # extractsentence
+    # Extract sentences
     before_sentences = extract_sentences_from_transcript(before_data)
     after_sentences = extract_sentences_from_transcript(after_data)
 
-    print(f"   source: {len(before_sentences)} ", file=sys.stderr)
-    print(f"   editversion: {len(after_sentences)} ", file=sys.stderr)
+    print(f"   原始：{len(before_sentences)} 句", file=sys.stderr)
+    print(f"   剪輯版本：{len(after_sentences)} 句", file=sys.stderr)
 
-    # OK齐 and analyze
-    print("🔍 OK齐transcribe文本...", file=sys.stderr)
+    # Align and analyse
+    print("🔍 對齊轉錄文字...", file=sys.stderr)
     kept, deleted = align_transcripts(before_sentences, after_sentences)
-    print(f"   keep: {len(kept)} , delete: {len(deleted)} ", file=sys.stderr)
+    print(f"   保留：{len(kept)} 句，刪除：{len(deleted)} 句", file=sys.stderr)
 
-    # analyze模式
-    print("📊 analyzeedit模式...", file=sys.stderr)
+    # Analyse patterns
+    print("📊 分析剪輯模式...", file=sys.stderr)
     patterns = analyze_patterns(before_sentences, kept, deleted)
 
-    # saveresult
+    # Save results
     output_path = Path(args.output)
     output_path.parent.mkdir(parents=True, exist_ok=True)
     with open(output_path, 'w', encoding='utf-8') as f:
         json.dump(patterns, f, ensure_ascii=False, indent=2)
 
-    print(f"\n✅ analyzeComplete，resultsaved: {output_path}", file=sys.stderr)
-    print(f"   总体删减率: {patterns['summary']['reduction_percent']}%", file=sys.stderr)
-    print(f"   激进度: {patterns['aggressiveness']}", file=sys.stderr)
-    print(f"   建议数量: {len(patterns['recommendations'])}", file=sys.stderr)
+    print(f"\n✅ 分析完成，結果已儲存：{output_path}", file=sys.stderr)
+    print(f"   整體刪減率：{patterns['summary']['reduction_percent']}%", file=sys.stderr)
+    print(f"   激進度：{patterns['aggressiveness']}", file=sys.stderr)
+    print(f"   建議數量：{len(patterns['recommendations'])}", file=sys.stderr)
 
-    # output到 stdout（供管道使use ）
+    # Output to stdout (for pipelines)
     print(json.dumps(patterns, ensure_ascii=False, indent=2))
 
 

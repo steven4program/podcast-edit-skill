@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
 """
-Layer 1: 信号层analyze — 播客edit质量detect
+Layer 1: signal-layer analysis — podcast edit-quality detection.
 
-自动detect剪切点，analyze 5 项指标：
-1. 能量突变（RMS energy ratio）
-2. 不自然silence（silence duration）
-3. 波形不连续（ZCR jump）
-4. 频谱跳变（MFCC cosine similarity）
-5. 呼吸音截断（energy envelope pattern）
+Auto-detects cut points and analyses 5 metrics:
+1. Energy jumps (RMS energy ratio)
+2. Unnatural silences (silence duration)
+3. Waveform discontinuity (ZCR jump)
+4. Spectral jumps (MFCC cosine similarity)
+5. Breath-sound truncation (energy envelope pattern)
 
-无needs 任何 API Key，纯本运算。
+Requires no API key — pure local computation.
 
-Usage：
+Usage:
     python3 signal_analysis.py --input podcast.mp3 --output qa_report.json
 """
 
@@ -25,21 +25,21 @@ import numpy as np
 
 
 def detect_cut_points(y, sr, hop_length=512):
-    """自动detectaudio中 剪切点（基于能量 and 频谱突变）"""
-    # 短时 RMS 能量
+    """Auto-detect cut points in audio (based on energy and spectral changes)."""
+    # Short-time RMS energy
     rms = librosa.feature.rms(y=y, hop_length=hop_length)[0]
     times = librosa.times_like(rms, sr=sr, hop_length=hop_length)
 
-    # 能量差 min  绝OK值
+    # Absolute value of energy difference
     rms_diff = np.abs(np.diff(rms))
 
-    # 自适应threshold：mean + 2 倍标准差
+    # Adaptive threshold: mean + 2 standard deviations
     threshold = np.mean(rms_diff) + 2.0 * np.std(rms_diff)
 
-    # 找到突变点
+    # Find spike points
     peaks = np.where(rms_diff > threshold)[0]
 
-    # merge相邻点（200ms 内 视为同一个剪切点）
+    # Merge adjacent points (within 200ms count as the same cut)
     min_gap_frames = int(0.2 * sr / hop_length)
     merged = []
     for p in peaks:
@@ -51,7 +51,7 @@ def detect_cut_points(y, sr, hop_length=512):
 
 
 def check_energy_jump(y, sr, cut_time, window_ms=100):
-    """detect项 1：剪切点前后能量突变"""
+    """Check 1: energy jump before/after the cut point."""
     window_samples = int(window_ms / 1000 * sr)
     cut_sample = int(cut_time * sr)
 
@@ -82,26 +82,26 @@ def check_energy_jump(y, sr, cut_time, window_ms=100):
 
 
 def check_silence(y, sr, cut_time, top_db=40):
-    """detect项 2：不自然silence（短 or 长）"""
-    # 在剪切点附近 2 srange内detectsilence
+    """Check 2: unnatural silence (too short or too long)."""
+    # Detect silence within a 2-second window around the cut point
     window = int(2 * sr)
     cut_sample = int(cut_time * sr)
     start = max(0, cut_sample - window)
     end = min(len(y), cut_sample + window)
     segment = y[start:end]
 
-    # detect非silenceinterval
+    # Detect non-silent intervals
     intervals = librosa.effects.split(segment, top_db=top_db)
     if len(intervals) < 2:
         return None
 
-    # calculatesilence segmentduration
+    # Compute silence segment durations
     for i in range(len(intervals) - 1):
         silence_start = intervals[i][1]
         silence_end = intervals[i + 1][0]
         silence_dur_ms = (silence_end - silence_start) / sr * 1000
 
-        # silence segmentinclude剪切点
+        # Silence segment containing the cut point
         silence_start_time = start / sr + silence_start / sr
         silence_end_time = start / sr + silence_end / sr
 
@@ -130,11 +130,11 @@ def check_silence(y, sr, cut_time, top_db=40):
 
 
 def check_zcr_jump(y, sr, cut_time, window_ms=50):
-    """detect项 3：波形不连续（零交叉率突变）"""
+    """Check 3: waveform discontinuity (zero-crossing rate jump)."""
     window_samples = int(window_ms / 1000 * sr)
     cut_sample = int(cut_time * sr)
 
-    # 取剪切点前后各 5 个窗口
+    # Take 5 windows on each side of the cut
     n_windows = 5
     zcr_before = []
     zcr_after = []
@@ -174,7 +174,7 @@ def check_zcr_jump(y, sr, cut_time, window_ms=50):
 
 
 def check_spectral_jump(y, sr, cut_time, window_ms=200):
-    """detect项 4：频谱跳变（MFCC 余弦相似度）"""
+    """Check 4: spectral jump (MFCC cosine similarity)."""
     window_samples = int(window_ms / 1000 * sr)
     cut_sample = int(cut_time * sr)
 
@@ -187,11 +187,11 @@ def check_spectral_jump(y, sr, cut_time, window_ms=200):
     if len(before) < sr * 0.05 or len(after) < sr * 0.05:
         return None
 
-    # calculate MFCC
+    # Compute MFCC
     mfcc_before = np.mean(librosa.feature.mfcc(y=before, sr=sr, n_mfcc=13), axis=1)
     mfcc_after = np.mean(librosa.feature.mfcc(y=after, sr=sr, n_mfcc=13), axis=1)
 
-    # 余弦相似度
+    # Cosine similarity
     cos_sim = np.dot(mfcc_before, mfcc_after) / (
         np.linalg.norm(mfcc_before) * np.linalg.norm(mfcc_after) + 1e-10
     )
@@ -210,11 +210,11 @@ def check_spectral_jump(y, sr, cut_time, window_ms=200):
 
 
 def check_breath_truncation(y, sr, cut_time, window_ms=150):
-    """detect项 5：呼吸音截断"""
+    """Check 5: breath-sound truncation."""
     window_samples = int(window_ms / 1000 * sr)
     cut_sample = int(cut_time * sr)
 
-    # 呼吸音特征：低能量 + 特定频谱形状
+    # Breath features: low energy plus a particular spectral shape
     start = max(0, cut_sample - window_samples)
     end = min(len(y), cut_sample + window_samples)
     segment = y[start:end]
@@ -222,15 +222,15 @@ def check_breath_truncation(y, sr, cut_time, window_ms=150):
     if len(segment) < sr * 0.05:
         return None
 
-    # 呼吸音通常在 200-2000Hz range，能量较低
+    # Breath sounds typically sit in the 200-2000Hz range with low energy
     rms = np.sqrt(np.mean(segment ** 2))
     overall_rms = np.sqrt(np.mean(y ** 2))
 
-    # 呼吸音能量通常是正常语音  5-20%
+    # Breath-sound energy is typically 5-20% of normal speech
     energy_ratio = rms / (overall_rms + 1e-10)
 
     if 0.05 < energy_ratio < 0.25:
-        # 检查whether在呼吸音"中间"被截断（能量pack络不OK称）
+        # Check whether the cut sits in the "middle" of a breath (asymmetric envelope)
         mid = len(segment) // 2
         first_half_rms = np.sqrt(np.mean(segment[:mid] ** 2))
         second_half_rms = np.sqrt(np.mean(segment[mid:] ** 2))
@@ -250,18 +250,18 @@ def check_breath_truncation(y, sr, cut_time, window_ms=150):
 
 
 def analyze(audio_path, output_path=None):
-    """主analyzefunction"""
+    """Main analysis function."""
     print(f"Loading audio: {audio_path}")
     y, sr = librosa.load(audio_path, sr=22050, mono=True)
     duration = librosa.get_duration(y=y, sr=sr)
     print(f"Duration: {duration:.1f}s ({duration/60:.1f} min), Sample rate: {sr}Hz")
 
-    # 自动detect剪切点
+    # Auto-detect cut points
     print("Detecting cut points...")
     cut_points = detect_cut_points(y, sr)
     print(f"Detected {len(cut_points)} potential cut points")
 
-    # OKeach个剪切点运line 5 项detect
+    # Run all 5 checks against each cut point
     issues = []
     checks = [
         ("energy_jump", check_energy_jump),
@@ -279,7 +279,7 @@ def analyze(audio_path, output_path=None):
             if result:
                 issues.append(result)
 
-    # 去重（同一time点 multi个Issuekeep最严重 ）
+    # Dedupe (when one timestamp has multiple issues, keep the most severe)
     seen_times = {}
     severity_order = {"high": 3, "medium": 2, "low": 1}
     for issue in issues:
@@ -288,12 +288,12 @@ def analyze(audio_path, output_path=None):
             seen_times[t] = issue
     issues = sorted(seen_times.values(), key=lambda x: x["timestamp"])
 
-    # calculate评 min 
+    # Compute the score
     high_count = sum(1 for i in issues if i["severity"] == "high")
     medium_count = sum(1 for i in issues if i["severity"] == "medium")
     low_count = sum(1 for i in issues if i["severity"] == "low")
 
-    # 评 min 公式：从 10  min Start扣 min 
+    # Score formula: start from 10 and deduct
     deduction = high_count * 0.8 + medium_count * 0.3 + low_count * 0.1
     score = max(1.0, round(10.0 - deduction, 1))
 
@@ -312,13 +312,13 @@ def analyze(audio_path, output_path=None):
         },
     }
 
-    # output
+    # Output
     if output_path:
         with open(output_path, "w", encoding="utf-8") as f:
             json.dump(report, f, ensure_ascii=False, indent=2)
         print(f"\nReport saved: {output_path}")
 
-    # 打印摘要
+    # Print summary
     print(f"\n{'='*50}")
     print(f"Signal Analysis Report")
     print(f"{'='*50}")

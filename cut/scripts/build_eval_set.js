@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 /**
- * build_eval_set.js — 从 ai_feedback JSON filegenerate gold standard eval set
+ * build_eval_set.js — produce a gold-standard eval set from ai_feedback JSON files.
  *
  * Usage:
  *   node build_eval_set.js feedback1.json feedback2.json ... --output eval_gold.json
  *   node build_eval_set.js --dir /path/to/feedback/ --output eval_gold.json
  *
- * input: ai_feedback_*.json (来自 review_enhanced.html  use 户feedback)
- * output: eval_gold.json — 按sentence组织  gold standard，含 expected_edits  and  false_positives
+ * Input: ai_feedback_*.json (user feedback from review_enhanced.html)
+ * Output: eval_gold.json — sentence-organised gold standard with expected_edits and false_positives.
  *
- * 同一sentence在multi个 feedback file中出现时，merge所有标注（去重）
+ * When the same sentence appears in multiple feedback files, all annotations are merged (deduplicated).
  */
 
 const fs = require('fs');
