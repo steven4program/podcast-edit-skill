@@ -35,6 +35,9 @@ const wordsFile = args.words || '../1_transcript/subtitles_words.json';
 const analysisFile = args.analysis || 'semantic_deep_analysis.json';
 const fineFile = args.fine || 'fine_analysis.json';
 const audioSrc = args.audio || '1_transcript/audio_seekable.mp3';
+// Optional second audio for the Source player (multitrack: raw amix without balance).
+// Falls back to the same as audioSrc when not provided (single-track path).
+const audioSrcRaw = args['audio-source-raw'] || audioSrc;
 const outputFile = args.output || '../review_enhanced.html';
 const title = args.title || 'Podcast review (editable)';
 
@@ -356,6 +359,7 @@ template = template.replace('__TOTAL_SENTENCES__', String(totalSentences));
 template = template.replace('__SPEAKER_STYLES__', speakerStyles);
 template = template.replaceAll('__SPEAKER_CLASS_FUNC__', speakerClassExpr);
 template = template.replace(/__AUDIO_SRC__/g, audioSrc);
+template = template.replace(/__AUDIO_SRC_RAW__/g, audioSrcRaw);
 template = template.replace(/__TITLE__/g, title);
 template = template.replace('__GEN_TIMESTAMP__', String(Date.now()));
 

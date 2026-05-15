@@ -234,7 +234,8 @@ def main():
                 '-i', current_base,
                 '-i', clip,
                 '-filter_complex',
-                f"[1:a]volume={args.voice_gain},adelay={delay_ms}|{delay_ms},apad=whole_dur={total_dur:.3f}[v];"
+                # alimiter after voice gain: voice-gain 2.0× can push peaks past 0 dBFS and clip.
+                f"[1:a]volume={args.voice_gain},alimiter=limit=0.95,adelay={delay_ms}|{delay_ms},apad=whole_dur={total_dur:.3f}[v];"
                 f"[0:a][v]amerge=inputs=2,pan=stereo|c0=c0+c2|c1=c1+c3[out]",
                 '-map', '[out]',
                 '-c:a', 'pcm_s16le',
@@ -254,7 +255,9 @@ def main():
             '-i', music_bed,
             '-i', voice_track,
             '-filter_complex',
-            '[0:a][1:a]amerge=inputs=2,pan=stereo|c0=c0+c2|c1=c1+c3[out]',
+            # Final limiter on the merged music+voice — additive amerge+pan can exceed 0 dBFS
+            # when both tracks peak together; -0.45 dBFS ceiling guarantees no clip in output.
+            '[0:a][1:a]amerge=inputs=2,pan=stereo|c0=c0+c2|c1=c1+c3,alimiter=limit=0.95[out]',
             '-map', '[out]',
             '-c:a', 'pcm_s16le',
             '-y', args.output

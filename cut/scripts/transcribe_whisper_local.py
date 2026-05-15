@@ -199,8 +199,8 @@ def main():
 
     whisper_path = output_dir / "whisper_transcription.json"
     subtitles_path = output_dir / "subtitles_words.json"
-    whisper_path.write_text(json.dumps(whisper_json, ensure_ascii=False, indent=2))
-    subtitles_path.write_text(json.dumps(subtitles_words, ensure_ascii=False, indent=2))
+    whisper_path.write_text(json.dumps(whisper_json, ensure_ascii=False, indent=2), encoding="utf-8")
+    subtitles_path.write_text(json.dumps(subtitles_words, ensure_ascii=False, indent=2), encoding="utf-8")
 
     real_words = [w for w in subtitles_words if not w.get("isGap") and not w.get("isSpeakerLabel")]
     gaps = [w for w in subtitles_words if w.get("isGap")]

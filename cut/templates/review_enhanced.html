@@ -1069,7 +1069,16 @@ __SPEAKER_STYLES__
   </div>
 </div>
 
-<audio id="audio-original" src="__AUDIO_SRC__" preload="auto"></audio>
+<!--
+  Source 模式播放 raw 混音(data-src-raw),Final cut(live) 模式播放 balanced 混音(data-src-balanced)。
+  togglePlay() 切模式時 swap .src,並在 'loadedmetadata' 後恢復 currentTime,確保 A/B 對照位置一致。
+  單軌路徑:raw 與 balanced 是同一個檔(swap 是 no-op)。
+-->
+<audio id="audio-original"
+       src="__AUDIO_SRC__"
+       data-src-balanced="__AUDIO_SRC__"
+       data-src-raw="__AUDIO_SRC_RAW__"
+       preload="auto"></audio>
 <!-- cut audio is now virtual - plays original with dynamic skipping -->
 
 <!-- Stats Header -->
@@ -2802,7 +2811,12 @@ function applyBoundaryNudge(merged, mergedIsSilence) {
 }
 
 function exportDeleteSegments() {
-  const ranges = collectActiveRanges();
+  // Match Final-cut (live) playback semantics: keep 0.8s of natural silence within
+  // every silence segment, only delete the excess. Without this, the exported cut
+  // is shorter than what the user heard while reviewing (because live preserves
+  // pause for natural pacing). Both paths must use the same silenceKeep so
+  // "what you heard = what you get".
+  const ranges = collectActiveRanges({ silenceKeep: 0.8 });
 
   // Sort and merge overlapping ranges
   // Each range: [start, end] or [start, end, 0, 'sil']
@@ -3419,7 +3433,35 @@ function getVirtualDuration() {
   return audio.duration - totalSkip;
 }
 
+// Swap <audio> src between balanced (Final-cut) and raw (Source) for A/B comparison.
+// Preserves currentTime across the swap so A/B at the same position is meaningful.
+function _ensureAudioMode(which, after) {
+  const audio = document.getElementById('audio-original');
+  const wantSrc = which === 'cut' ? audio.dataset.srcBalanced : audio.dataset.srcRaw;
+  if (!wantSrc || wantSrc === audio.dataset.srcRaw && wantSrc === audio.dataset.srcBalanced) {
+    // single-track: no swap needed
+    after(); return;
+  }
+  // Compare against the absolute resolved src to detect "already loaded".
+  const resolved = new URL(wantSrc, location.href).href;
+  if (audio.src === resolved) { after(); return; }
+  const resumeT = audio.currentTime || 0;
+  const wasPlaying = !audio.paused;
+  audio.pause();
+  audio.addEventListener('loadedmetadata', function onMeta() {
+    audio.removeEventListener('loadedmetadata', onMeta);
+    try { audio.currentTime = resumeT; } catch (e) {}
+    after(wasPlaying);
+  }, { once: true });
+  audio.src = wantSrc;
+  audio.load();
+}
+
 function togglePlay(which) {
+  _ensureAudioMode(which, function () { _togglePlayInner(which); });
+}
+
+function _togglePlayInner(which) {
   const audio = document.getElementById('audio-original');
   const btn = document.querySelector('#player-' + which + ' .play-btn');
 
@@ -3613,20 +3655,23 @@ function cycleSpeed(which) {
 }
 
 function seekAudio(event, which) {
-  const audio = document.getElementById('audio-original');
+  // Capture click position before async swap (event.currentTarget can clear after await).
   const bar = event.currentTarget;
   const rect = bar.getBoundingClientRect();
   const pct = (event.clientX - rect.left) / rect.width;
-  
-  if (which === 'cut') {
-    cutMode = true;
-    const vDur = getVirtualDuration();
-    const vTime = pct * vDur;
-    audio.currentTime = virtualToOriginal(vTime);
-  } else {
-    cutMode = false;
-    audio.currentTime = pct * audio.duration;
-  }
+
+  _ensureAudioMode(which, function () {
+    const audio = document.getElementById('audio-original');
+    if (which === 'cut') {
+      cutMode = true;
+      const vDur = getVirtualDuration();
+      const vTime = pct * vDur;
+      audio.currentTime = virtualToOriginal(vTime);
+    } else {
+      cutMode = false;
+      audio.currentTime = pct * audio.duration;
+    }
+  });
 }
 
 function seekToTime(seconds) {

@@ -7,3 +7,5 @@ node_modules/
 cut/user-prefs/
 cut/todo.md
 source/
+__pycache__/
+*.pyc

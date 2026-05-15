@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(python -c \"import ast; ast.parse\\(open\\(r'C:\\\\Users\\\\user\\\\Desktop\\\\podcast-edit-skill\\\\cut\\\\scripts\\\\cut_audio_multitrack.py', encoding='utf-8'\\).read\\(\\)\\); print\\('OK'\\)\")",
+      "Bash(node scripts/user_manager.js list)",
+      "PowerShell(ffprobe *)",
+      "Bash(node scripts/user_manager.js prefs samuel)",
+      "Bash(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"/c/Users/user/Desktop/podcast-edit-skill/source/hogan-5m.mp3\")",
+      "Bash(ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 \"/c/Users/user/Desktop/podcast-edit-skill/source/ted35-01-5m.mp3\")"
+    ]
+  }
+}

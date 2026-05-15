@@ -23,12 +23,17 @@ Architecture guardian: when this file is modified, also update:
 User: cut this podcast, three speakers: Alice, Bob, Carol
 User: edit this audio /path/to/audio.mp3, two hosts
 User: cut this recording, speakers: host, guest
+
+# Multitrack (one file per speaker — Riverside / Zencastr style):
+User: multitrack cut: source/hogan.mp3=Hogan, source/ted.mp3=Ted
+User: 雙軌剪輯:source/a.mp3=Alice, source/b.mp3=Bob, source/c.mp3=Carol
 ```
 
 **Required inputs**:
-1. Audio file path
+1. Audio file path(s)
 2. Speaker label for the MVP local Whisper path (defaults to `Speaker 0`)
 3. Speaker count and speaker names only if using Aliyun fallback or future diarization
+4. **Multitrack mode** — triggered when the user provides **2+ audio files with explicit `file=Speaker` mapping**, or says "multitrack" / "雙軌" / "多軌" / "one track per speaker". Stage 2 transcription routes to `transcribe_whisper_multitrack.py`; Stage 5 routes to `cut_audio_multitrack.py` (produces `<speaker>_solo.mp3` per track + `episode_merged.mp3`).
 
 **⚠️ Pre-flight checks**:
 - Default to local Whisper unless the user explicitly asks for Aliyun/FunASR.
@@ -47,8 +52,10 @@ output/
 └── YYYY-MM-DD_<audio-name>/
     └── cut/
         ├── 1_transcript/                       # raw transcription data
-        │   ├── audio.mp3                       # source (transcription input)
-        │   ├── audio_seekable.mp3              # CBR re-encode (review page; precise seek)
+        │   ├── audio.mp3                       # transcription input (multitrack: balanced mix)
+        │   ├── audio_seekable.mp3              # CBR re-encode for review (multitrack: balanced mix → Final-cut player)
+        │   ├── audio_seekable_raw.mp3          # CBR re-encode for review (multitrack ONLY: raw amix → Source player, A/B vs balanced)
+        │   ├── <Speaker>_original.mp3          # multitrack ONLY: per-track copy of source (Stage 5 cuts from these)
         │   ├── audio_url.txt                   # uploaded URL
         │   ├── whisper_transcription.json      # local Whisper output (default path)
         │   ├── whisper_<speaker>.json          # per-track Whisper output (multitrack path)
@@ -225,6 +232,8 @@ mkdir -p "$BASE_DIR/1_transcript" "$BASE_DIR/2_analysis" "$BASE_DIR/3_output"
 
 ##### Prepare the audio
 
+**Single-track path:**
+
 ```bash
 # 1) Keep the original high-quality audio (used for cutting; don't transcode)
 AUDIO_EXT="${AUDIO_PATH##*.}"
@@ -243,7 +252,32 @@ echo "   audio.mp3                  (transcription, 16 kHz mono)"
 echo "   audio_seekable.mp3         (review page, CBR)"
 ```
 
-> **At cut time (Stage 5) you MUST use `audio_original.*`**, not `audio.mp3`. The latter is 16 kHz downsampled — cutting it produces low-quality output.
+**Multitrack path (one file per speaker)** — keep per-speaker originals untouched (Stage 5 cuts from them), and produce **three** mp3s so the review page can A/B raw vs balanced:
+
+```bash
+# 1) Keep each track's original (Stage 5 cuts from these — never transcode them)
+cp source/hogan.mp3 "$BASE_DIR/1_transcript/Hogan_original.mp3"
+cp source/ted.mp3   "$BASE_DIR/1_transcript/Ted_original.mp3"
+
+# 2) Run the multitrack prep — applies the SAME --balance strategy that Stage 5 will use.
+python3 "$SKILL_DIR/cut/scripts/prep_review_audio_multitrack.py" \
+  --track "Hogan=$BASE_DIR/1_transcript/Hogan_original.mp3" \
+  --track "Ted=$BASE_DIR/1_transcript/Ted_original.mp3" \
+  --output-dir "$BASE_DIR/1_transcript" \
+  --balance equalize        # MUST match the --balance you'll pass to cut_audio_multitrack later
+# Optional offset: --offset "Ted=0.25"
+```
+
+Outputs:
+- `audio.mp3` — 16 kHz mono, **balanced** mix → Whisper transcription input
+- `audio_seekable.mp3` — CBR 64k, **balanced** mix → review page **Final-cut (live)** player
+- `audio_seekable_raw.mp3` — CBR 64k, **raw** amix (no per-track loudnorm, no final loudnorm) → review page **Source** player
+
+> ⚠️ **A/B design**: the review page's Source button plays the raw mix and the Final-cut button plays the balanced mix. This lets the user hear "before vs after" of the inter-track balance work. The template swaps `<audio>.src` between the two when toggling modes (currentTime is preserved). When generating the HTML in Step 6, **you MUST pass `--audio-source-raw 1_transcript/audio_seekable_raw.mp3`** — without it, both buttons play the same balanced file and the comparison is meaningless. Single-track path doesn't have a raw version; omit the flag and both buttons play the same audio (no A/B available, by design).
+
+> ⚠️ **The `--balance` mode used here must match Stage 5's `cut_audio_multitrack.py --balance ...`** — otherwise the review-page Final-cut playback won't represent what Stage 5 will actually produce. If the user changes balance mode mid-flow, re-run BOTH (and re-generate the review HTML before they start审稿).
+
+> **At cut time (Stage 5) you MUST use the per-speaker `<Speaker>_original.*` files**, not the mixed `audio.mp3`. The latter is 16 kHz mono downsampled — cutting it produces low-quality, mono-merged output.
 
 > **The review page MUST use `audio_seekable.mp3`**. In Step 6, pass `--audio 1_transcript/audio_seekable.mp3` to the HTML generator.
 
@@ -302,7 +336,7 @@ python3 "$SKILL_DIR/cut/scripts/transcribe_whisper_multitrack.py" \
 Key points:
 - Track files must share the same zero timestamp. If Bob starts 0.25 s late, pass `--offset "Bob=0.25"`.
 - Each track is treated as one speaker; this is more reliable than diarization when isolated tracks are available.
-- The review page still uses the mixed/seekable `audio_seekable.mp3`; multitrack input is only for transcription and speaker labels.
+- The review page uses the **balanced** `audio_seekable.mp3` for the Final-cut player and the **raw** `audio_seekable_raw.mp3` for the Source player (both produced by `prep_review_audio_multitrack.py`). Multitrack `--track` input here is only for transcription and speaker labels.
 
 Optional Aliyun fallback:
 
@@ -732,6 +766,9 @@ Benefit:  every edit is instant — no audio regen needed
 - `originalToVirtual()` / `virtualToOriginal()` — original ↔ virtual time conversion.
 - The progress bar is virtual time (deleted duration subtracted automatically).
 
+**WYSIWYG silence handling** (v6.1):
+Both the Final-cut (live) player and the green "Export cut file" button call `collectActiveRanges({ silenceKeep: 0.8 })` — every `silence` / `silence_merged` segment **keeps 0.8s of natural pause** and only the excess is deleted. This guarantees what the user审稿 hears is exactly what `episode_merged.mp3` will be (length + pacing). Earlier versions exported with full-silence-delete which produced shorter, tighter-pacing cuts than what the user reviewed; that drift is now closed.
+
 **4. Interactive editing**:
 
 | Feature | Action | Notes |
@@ -759,15 +796,19 @@ Benefit:  every edit is instant — no audio regen needed
 ```bash
 cd "$BASE_DIR/2_analysis"
 
-# Generate the review HTML (audio_seekable.mp3 was made in Step 1)
+# Generate the review HTML (audio_seekable*.mp3 made in Step 1)
 node "$SKILL_DIR/cut/scripts/generate_review_enhanced.js" \
   --sentences sentences.txt \
   --words "$BASE_DIR/1_transcript/subtitles_words.json" \
   --analysis semantic_deep_analysis.json \
   --fine fine_analysis.json \
   --audio "1_transcript/audio_seekable.mp3" \
+  --audio-source-raw "1_transcript/audio_seekable_raw.mp3" \
   --output "$BASE_DIR/review_enhanced.html" \
   --title "Podcast review (editable)"
+# --audio-source-raw is OPTIONAL. Pass it (multitrack only) so the Source player
+# plays the unbalanced raw mix while Final-cut (live) plays the balanced one,
+# enabling A/B comparison. Omit for single-track — both buttons play the same file.
 
 # Open it
 open "$BASE_DIR/review_enhanced.html"
@@ -957,6 +998,12 @@ node "$SKILL_DIR/cut/scripts/append_eval_history.js" \
 
 Use FFmpeg. Decode to WAV first to ensure sample-accurate cuts.
 
+**Route by input shape:**
+- **Single-track input** (one mixed audio file) → `cut_audio.py` (path A below).
+- **Multitrack input** (one file per speaker, mapped via `file=Speaker`) → `cut_audio_multitrack.py` (path B below). Produces per-speaker solo MP3s **and** an inter-track-loudness-balanced merged MP3.
+
+##### Path A — single-track
+
 ```bash
 cd "$BASE_DIR/2_analysis"
 
@@ -974,6 +1021,37 @@ python3 "$SKILL_DIR/cut/scripts/cut_audio.py" \
   --speakers-json "$BASE_DIR/1_transcript/subtitles_words.json" \
   --no-fade
 ```
+
+##### Path B — multitrack (solo + merged)
+
+Use the same `delete_segments_edited.json` (the canonical merged-rough+fine ranges). Every track gets the same cuts so the timelines stay aligned across solo files and the merged mix.
+
+```bash
+cd "$BASE_DIR/2_analysis"
+
+python3 "$SKILL_DIR/cut/scripts/cut_audio_multitrack.py" \
+  --track "Hogan=$REPO_ROOT/source/hogan-5m.mp3" \
+  --track "Ted=$REPO_ROOT/source/ted35-01-5m.mp3" \
+  --delete-segments delete_segments_edited.json \
+  --output-dir "$BASE_DIR/3_output"
+```
+
+**Output:**
+- `3_output/<Speaker>_solo.mp3` — per-track cut + dynaudnorm + loudnorm to -16 LUFS.
+- `3_output/episode_merged.mp3` — see `--balance` for the mix strategy. Always ends in a final loudnorm to -16 LUFS.
+
+**Flags:**
+- `--balance equalize|lift|none` — inter-speaker volume strategy for the merged mix. **Default: `equalize`.**
+  - `equalize` (default) — each track is dynaudnorm + loudnorm'd to -16 LUFS individually, then mixed; the post-mix stage runs **only** loudnorm (no second dynaudnorm). This makes each `<Speaker>_solo.mp3` audibly identical to that speaker's voice as heard in `episode_merged.mp3` — important when the user ships solo + merged together (e.g. video subtitle track + audio podcast). Strongest inter-speaker level consistency. Trade-off: the louder speaker's dynamics get a bit compressed.
+  - `lift` — measure each track's LUFS, raise the quieter ones up to the loudest track's level (+12 dB cap), then mix; post-mix runs dynaudnorm + loudnorm. Preserves the loudest speaker's natural dynamics.
+  - `none` — just mix the raw cut WAVs + post-mix dynaudnorm + loudnorm. Big level differences stay big.
+- `--offset "Speaker=0.25"` — repeatable. Shift a track that starts late.
+- `--bitrate 192` — MP3 bitrate kbps (default 192).
+- `--keep-intermediates` — leave per-track cut/loudnormed WAVs for debugging.
+
+**Notes:**
+- `--speakers-json` is **not** needed here — each input file already corresponds to one speaker.
+- Stage 5.2 (silence trim) still applies, run it against each output you intend to ship.
 
 > Pass `--speakers-json` always. The script auto-detects volume difference and skips compensation when < 0.5 dB; no side effect.
 > **`--no-fade` is mandatory**: the default adaptive fade (max 0.3 s) eats short syllables. `--no-fade` uses a 3 ms micro-fade instead — defeats clicks without affecting speech.

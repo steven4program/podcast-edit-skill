@@ -61,7 +61,7 @@ def load_speaker_segments(speakers_json_path):
 
     Returns: {speaker_name: [(start, end), ...]}
     """
-    with open(speakers_json_path) as f:
+    with open(speakers_json_path, encoding="utf-8") as f:
         words = json.load(f)
 
     speaker_segments = defaultdict(list)
@@ -230,7 +230,7 @@ def main():
         sys.exit(1)
 
     # Load delete segments (supports both new {segments: [...], editState: {...}} and legacy [...] format)
-    with open(delete_file) as f:
+    with open(delete_file, encoding="utf-8") as f:
         raw = json.load(f)
     delete_segs = raw['segments'] if isinstance(raw, dict) and 'segments' in raw else raw
 
@@ -347,6 +347,9 @@ def main():
             filters = []
             if vol_gain > 0:
                 filters.append(f'volume={vol_gain:.2f}dB')
+                # Brick-wall limiter right after the gain — prevents clipping when
+                # a loud peak in the boosted speaker's audio would exceed 0 dBFS.
+                filters.append('alimiter=limit=0.95')
             if fade_in_dur > 0:
                 filters.append(f'afade=t=in:d={fade_in_dur:.3f}')
             if fade_out_dur > 0:
@@ -422,11 +425,17 @@ def main():
     # MP3 bitrate: at least 128k, cap at 192k
     out_bitrate = max(src_bitrate // 1000, 128)
     out_bitrate = min(out_bitrate, 192)
-    print(f"🔧 Encoding to MP3 (source: {src_bitrate//1000} kbps {src_sample_rate} Hz {src_channels} ch → output: {out_bitrate} kbps)...")
-
+    # EBU R128 loudness normalization to -16 LUFS (Apple/Spotify podcast target),
+    # with true-peak ceiling at -1.5 dBFS as a final safety net against clipping.
+    print(f"🔧 Encoding to MP3 (source: {src_bitrate//1000} kbps {src_sample_rate} Hz {src_channels} ch → output: {out_bitrate} kbps, loudnorm -16 LUFS)...")
     cmd = [
         'ffmpeg', '-v', 'quiet', '-stats',
         '-i', temp_concat,
+        # dynaudnorm: smooths intra-speaker loudness swings (mic distance / soft vs loud delivery).
+        # f=500 (500 ms frame), g=15 (gaussian smoothing window), p=0.7 (peak target) — gentle for
+        # speech, avoids the "pumping" / robotic feel of an aggressive compressor.
+        # loudnorm: integrated loudness to -16 LUFS, true peak ≤ -1.5 dBFS (final clip safety net).
+        '-af', 'dynaudnorm=f=500:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11',
         '-c:a', 'libmp3lame', '-b:a', f'{out_bitrate}k',
     ]
     if src_sample_rate and src_sample_rate > 16000:

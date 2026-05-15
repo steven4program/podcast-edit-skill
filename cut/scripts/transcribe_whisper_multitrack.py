@@ -247,7 +247,7 @@ def build_merged_subtitles(track_results, gap_threshold):
 
 
 def write_json(path, data):
-    path.write_text(json.dumps(data, ensure_ascii=False, indent=2))
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def main():
