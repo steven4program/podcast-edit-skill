@@ -37,6 +37,8 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import numpy as np
+
 CHUNK_SEC = 30
 HOP_SEC = 25
 MODEL = "gemini-2.5-flash"
@@ -338,6 +340,63 @@ def annotate_events_with_word_context(events: list[dict],
     return out
 
 
+def refine_event_boundary(
+    audio: "np.ndarray",
+    sr: int,
+    gem_start: float,
+    gem_end: float,
+    padding: float = 0.3,
+    db_drop: float = 12.0,
+) -> tuple[float, float]:
+    """Snap event boundary to local RMS-envelope minima.
+
+    Strategy:
+        Take audio in [gem_start - padding, gem_end + padding].
+        Compute RMS envelope at 10ms hop.
+        Find the peak inside [gem_start, gem_end].
+        Walk left/right until RMS drops `db_drop` dB below the peak.
+        Return absolute (refined_start, refined_end).
+    """
+    import librosa
+
+    duration = len(audio) / sr
+    s = max(0.0, gem_start - padding)
+    e = min(duration, gem_end + padding)
+    region = audio[int(s * sr): int(e * sr)]
+    if len(region) < int(sr * 0.05):
+        # Region too short for analysis — return inputs clamped
+        return max(0.0, gem_start), min(duration, gem_end)
+
+    hop_s = 0.01
+    rms = librosa.feature.rms(
+        y=region,
+        frame_length=int(sr * 0.03),
+        hop_length=int(sr * hop_s),
+    )[0]
+    rms_db = 20 * np.log10(rms + 1e-9)
+
+    # Find peak idx inside [gem_start - s, gem_end - s] in seconds
+    inside_start = max(0, int((gem_start - s) / hop_s))
+    inside_end = min(len(rms_db), int((gem_end - s) / hop_s))
+    if inside_end <= inside_start:
+        return max(0.0, gem_start), min(duration, gem_end)
+    peak_idx_rel = int(np.argmax(rms_db[inside_start:inside_end]))
+    peak_idx = inside_start + peak_idx_rel
+
+    threshold = rms_db[peak_idx] - db_drop
+
+    left = peak_idx
+    while left > 0 and rms_db[left] > threshold:
+        left -= 1
+    right = peak_idx
+    while right < len(rms_db) - 1 and rms_db[right] > threshold:
+        right += 1
+
+    refined_start = s + left * hop_s
+    refined_end = s + right * hop_s
+    return max(0.0, refined_start), min(duration, refined_end)
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Detect non-speech vocal events in podcast audio via Gemini."
@@ -386,6 +445,23 @@ def main():
     raw_events, raw_responses, failed_chunks = scan_audio(audio_path, client)
     events = dedupe_events(raw_events)
     events = annotate_events_with_word_context(events, word_spans)
+
+    # Load audio once for boundary refinement
+    import soundfile as sf
+    audio_data, audio_sr = sf.read(str(audio_path))
+    if audio_data.ndim > 1:
+        audio_data = audio_data.mean(axis=1)
+    audio_data = audio_data.astype("float32")
+    if audio_sr != 16000:
+        import librosa
+        audio_data = librosa.resample(audio_data, orig_sr=audio_sr, target_sr=16000)
+        audio_sr = 16000
+
+    for ev in events:
+        rs, re_ = refine_event_boundary(audio_data, audio_sr, ev["start"], ev["end"])
+        ev["refined_start"] = round(rs, 3)
+        ev["refined_end"] = round(re_, 3)
+
     duration = get_audio_duration(audio_path)
     degraded = failed_chunks >= 2
 

@@ -198,5 +198,40 @@ class TestLoadWordSpans(unittest.TestCase):
             path.unlink()
 
 
+from detect_non_speech_vocals_gemini import refine_event_boundary
+
+
+class TestRefineEventBoundary(unittest.TestCase):
+    def setUp(self):
+        import numpy as np
+        # Construct a synthetic signal: 1s silence, 0.3s burst, 1s silence
+        self.sr = 16000
+        self.audio = np.concatenate([
+            np.zeros(int(1.0 * self.sr)),
+            np.random.normal(0, 0.3, int(0.3 * self.sr)),
+            np.zeros(int(1.0 * self.sr)),
+        ]).astype("float32")
+        # The burst is at 1.0-1.3 in the audio. We give Gemini a sloppy estimate 0.85-1.45.
+        self.gem_start = 0.85
+        self.gem_end = 1.45
+
+    def test_refines_to_within_50ms_of_truth(self):
+        refined_start, refined_end = refine_event_boundary(
+            self.audio, self.sr, self.gem_start, self.gem_end,
+        )
+        # Truth: 1.0-1.3; allow ±0.05s
+        self.assertAlmostEqual(refined_start, 1.0, delta=0.05)
+        self.assertAlmostEqual(refined_end, 1.3, delta=0.05)
+
+    def test_handles_event_near_boundary(self):
+        # Event at start of file (gem_start would be negative without padding)
+        refined_start, refined_end = refine_event_boundary(
+            self.audio, self.sr, gem_start=0.0, gem_end=0.2,
+        )
+        # Should not crash, return values in [0, duration]
+        self.assertGreaterEqual(refined_start, 0)
+        self.assertLessEqual(refined_end, len(self.audio) / self.sr)
+
+
 if __name__ == "__main__":
     unittest.main()
