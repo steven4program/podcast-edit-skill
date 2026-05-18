@@ -42,6 +42,41 @@ const gaps = allWords.filter(w => w.isGap);
 const SILENCE_THRESHOLD = 0.8;
 const SILENCE_CAP = 0.8;
 
+// === Stage 2.5: Non-speech vocal events ===
+const nsvPath = path.join(analysisDir, 'non_speech_vocals.json');
+let nsvData = { events: [], degraded: true };
+if (fs.existsSync(nsvPath)) {
+  try {
+    nsvData = JSON.parse(fs.readFileSync(nsvPath, 'utf8'));
+  } catch (err) {
+    console.warn(`⚠️  Failed to parse ${nsvPath}: ${err.message}`);
+  }
+}
+
+function nsvTypeLabel(subtype) {
+  return { throat_clear: '清喉嚨', nose_clear: '清鼻子' }[subtype] || subtype;
+}
+
+function findSentenceIdxForTime(time, sentences) {
+  // Find first sentence whose [startTime, endTime] contains the time;
+  // fallback to nearest by midpoint.
+  for (const s of sentences) {
+    if (time >= s.startTime && time <= s.endTime) return s.idx;
+  }
+  // Fallback: nearest sentence by midpoint
+  let bestIdx = sentences.length > 0 ? sentences[0].idx : 0;
+  let bestDist = Infinity;
+  for (const s of sentences) {
+    const mid = (s.startTime + s.endTime) / 2;
+    const d = Math.abs(mid - time);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = s.idx;
+    }
+  }
+  return bestIdx;
+}
+
 // === Stutter exemption tiers ===
 
 // Tier 1: reduplication-word allow-list — blanket exempt, never flag.
@@ -680,6 +715,35 @@ for (const e of edits) {
       e.deleteEnd = parseFloat(nextWord.start.toFixed(2));
     }
   }
+}
+
+// === Emit NSV events as fine edits ===
+for (const ev of (nsvData.events || [])) {
+  // Use refined boundaries if present, else raw
+  const dStart = (ev.refined_start ?? ev.start);
+  const dEnd = (ev.refined_end ?? ev.end);
+  const sentenceIdx = findSentenceIdxForTime(dStart, sentences);
+
+  edits.push({
+    idx: editIdx++,
+    sentenceIdx,
+    type: 'non_speech_vocal',
+    subtype: ev.type,                                  // 'throat_clear' | 'nose_clear'
+    rule: '11-non-speech-vocal',
+    wordRange: null,                                    // NSV is between/near words
+    deleteText: '',                                     // no transcript text consumed
+    keepText: '',
+    deleteStart: parseFloat(dStart.toFixed(2)),
+    deleteEnd: parseFloat(dEnd.toFixed(2)),
+    reason: `${nsvTypeLabel(ev.type)}（Gemini 偵測）${ev.description ? '：' + ev.description : ''}`,
+    needsReview: true,
+    enabled: false,                                     // default: don't delete; user confirms
+    confidence: ev.confidence,
+    source: 'gemini',
+    nsv_id: ev.id,
+    description: ev.description,
+    filter_decision: ev.filter_decision,
+  });
 }
 
 // Sort edits by time
