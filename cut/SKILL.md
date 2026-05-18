@@ -95,6 +95,7 @@ Stage 2: cut analysis
     2.1 infrastructure: dirs → prep audio → upload → transcribe → split sentences
     2.2 rough cut (paragraph level): semantic_deep_analysis.json
     2.3 fine cut (word/sentence level): fine_analysis.json
+    2.4 non-speech vocal detection (Gemini): non_speech_vocals.json 🆕
     ↓
 Stage 3: AI self-review
     → automatically reviews rough + fine markings; catches missed edits
@@ -596,6 +597,26 @@ Merge (merge_llm_fine.js → fine_analysis.json):
 - Step 5 produces `semantic_deep_analysis.json` (paragraph level, big block deletes).
 - Step 5b produces `fine_analysis.json` (word/sentence level, verbal tic deletes).
 - Both are independently produced and merged in the step 6 review UI; the user manually edits and exports `delete_segments_edited.json`.
+
+---
+
+#### 2.4 Non-speech vocal detection (Gemini)
+
+**When**: After 2.3 fine cut runs (so `fine_analysis_rules.json` exists with the rule-layer edits), before Stage 3 self-review.
+
+**Command**:
+
+```bash
+python3 cut/scripts/detect_non_speech_vocals_gemini.py <BASE_DIR>
+```
+
+Detects 清喉嚨 / 清鼻子 events that the filler / silence rules cannot see. Writes `2_analysis/non_speech_vocals.json`.
+
+`run_fine_analysis.js` will pick up that file on subsequent runs and emit each event as a fine edit with `type: 'non_speech_vocal'`, `needsReview: true`, `enabled: false` — surfaced in the review HTML's 非語音聲響 section for user confirmation.
+
+**Requires**: `GEMINI_API_KEY` set in `.env` at repo root. If missing, the stage emits an empty `non_speech_vocals.json` with `degraded: true` and the rest of the pipeline continues.
+
+See `cut/editing-rules/11-non-speech-vocal.md` for detection logic, filter behaviour, and output schema. See `docs/superpowers/specs/2026-05-18-non-speech-vocal-detection-design.md` for why this is a separate stage (not part of fine-cut rules).
 
 ---
 
