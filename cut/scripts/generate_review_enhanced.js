@@ -346,6 +346,22 @@ const speakerClassParts = uniqueSpeakers.map((sp, i) => {
 speakerClassParts.push(`'sp-0'`);
 const speakerClassExpr = speakerClassParts.join(' : ');
 
+// === Build NSV section payload ===
+const nsvEdits = (fineAnalysis ? fineAnalysis.edits : [])
+  .filter(e => e.type === 'non_speech_vocal')
+  .map(e => ({
+    feIdx: e.idx,
+    nsv_id: e.nsv_id,
+    subtype: e.subtype,
+    subtypeLabel: ({ throat_clear: '清喉嚨', nose_clear: '清鼻子' }[e.subtype] || e.subtype),
+    start: e.deleteStart,
+    end: e.deleteEnd,
+    description: e.description || '',
+    confidence: e.confidence,
+    filter_decision: e.filter_decision,
+    enabled: e.enabled,
+  }));
+
 // ===== Inject template =====
 console.log('📝 產生 HTML...');
 let template = fs.readFileSync(templateFile, 'utf8');
@@ -353,6 +369,7 @@ let template = fs.readFileSync(templateFile, 'utf8');
 const dataJson = JSON.stringify(sentencesData);
 template = template.replace('__SENTENCES_DATA__', dataJson);
 template = template.replace('__BLOCKS_DATA__', JSON.stringify(blocksDataArr));
+template = template.replace('__NSV_EDITS__', JSON.stringify(nsvEdits));
 template = template.replace('__AI_DELETED_COUNT__', String(deletedCount + suggestedCount));
 template = template.replace('__AI_SUGGESTED_COUNT__', String(suggestedCount));
 template = template.replace('__TOTAL_SENTENCES__', String(totalSentences));

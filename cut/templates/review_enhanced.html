@@ -1029,6 +1029,23 @@ __SPEAKER_STYLES__
   .s-idx { width: 32px; }
   .s-check { display: none; }
 }
+
+.nsv-section { margin: 24px 0; padding: 16px; background: #1a1f28; border-radius: 8px; color: #e0e0e0; }
+.nsv-section h2 { font-size: 16px; margin: 0 0 8px; color: #fff; }
+.nsv-help { color: #9aa3ad; font-size: 13px; margin: 0 0 12px; }
+.nsv-empty { color: #9aa3ad; font-style: italic; }
+.nsv-card { border: 1px solid #2f3742; padding: 10px 12px; margin: 8px 0; border-radius: 6px; }
+.nsv-card.nsv-confirmed { background: rgba(111, 207, 151, 0.1); border-color: #6fcf97; }
+.nsv-card.nsv-kept { background: rgba(235, 87, 87, 0.08); border-color: #eb5757; }
+.nsv-head { display: flex; gap: 12px; align-items: center; font-size: 13px; }
+.nsv-time { font-family: ui-monospace, monospace; }
+.nsv-type.type-throat_clear { color: #eb5757; font-weight: 600; }
+.nsv-type.type-nose_clear { color: #f2c94c; font-weight: 600; }
+.nsv-warning { color: #f2c94c; font-size: 12px; }
+.nsv-desc { color: #cdd5dc; font-size: 13px; margin: 6px 0; }
+.nsv-actions button { margin-right: 6px; padding: 4px 10px; }
+.btn-confirm { border-color: #6fcf97; }
+.btn-keep { border-color: #eb5757; }
 </style>
 </head>
 <body>
@@ -1161,6 +1178,13 @@ __SPEAKER_STYLES__
     <span class="filter-label">Speakers (click to rename):</span>
   </div>
 </div>
+
+<!-- Non-speech vocal section -->
+<section class="nsv-section">
+  <h2>非語音聲響（Gemini 偵測）</h2>
+  <p class="nsv-help">主持人句前/句尾的清喉嚨、清鼻子聲。逐筆確認是否刪除。</p>
+  <div id="nsv-list"></div>
+</section>
 
 <!-- Selection Popup (appears on mouse-drag select) -->
 <div class="selection-popup" id="selection-popup" style="display:none;">
@@ -4583,6 +4607,108 @@ document.addEventListener('mousedown', function(e) {
   }
 });
 
+// === Non-speech vocal review section ===
+const nsvEdits = __NSV_EDITS__;  // injected by generate_review_enhanced.js
+
+function renderNsvList() {
+  const root = document.getElementById('nsv-list');
+  if (!root) return;
+  root.replaceChildren();
+  if (!nsvEdits || nsvEdits.length === 0) {
+    const empty = document.createElement('p');
+    empty.className = 'nsv-empty';
+    empty.textContent = '此集沒有偵測到清喉嚨/清鼻子事件。';
+    root.appendChild(empty);
+    return;
+  }
+  for (const nsv of nsvEdits) {
+    const card = document.createElement('div');
+    card.className = 'nsv-card';
+    card.dataset.feIdx = nsv.feIdx;
+
+    const head = document.createElement('div');
+    head.className = 'nsv-head';
+    const t = document.createElement('span');
+    t.className = 'nsv-time';
+    t.textContent = nsv.start.toFixed(2) + '-' + nsv.end.toFixed(2) + 's';
+    head.appendChild(t);
+    const lbl = document.createElement('span');
+    lbl.className = 'nsv-type type-' + nsv.subtype;
+    lbl.textContent = nsv.subtypeLabel;
+    head.appendChild(lbl);
+    const conf = document.createElement('span');
+    conf.className = 'nsv-conf';
+    conf.textContent = 'conf ' + nsv.confidence.toFixed(2);
+    head.appendChild(conf);
+    if (nsv.filter_decision === 'boundary_too_tight') {
+      const w = document.createElement('span');
+      w.className = 'nsv-warning';
+      w.textContent = '⚠ 邊界過緊，剪輯易產生 artifact';
+      head.appendChild(w);
+    }
+    card.appendChild(head);
+
+    if (nsv.description) {
+      const d = document.createElement('p');
+      d.className = 'nsv-desc';
+      d.textContent = nsv.description;
+      card.appendChild(d);
+    }
+
+    const actions = document.createElement('div');
+    actions.className = 'nsv-actions';
+    const play = document.createElement('button');
+    play.textContent = '▶ 試聽';
+    play.addEventListener('click', () => nsvPlayClip(nsv.start, nsv.end));
+    actions.appendChild(play);
+    const confirm = document.createElement('button');
+    confirm.className = 'btn-confirm';
+    confirm.textContent = '✅ 確認刪除';
+    confirm.addEventListener('click', () => setNsvDecision(nsv.feIdx, true));
+    actions.appendChild(confirm);
+    const keep = document.createElement('button');
+    keep.className = 'btn-keep';
+    keep.textContent = '❌ 保留';
+    keep.addEventListener('click', () => setNsvDecision(nsv.feIdx, false));
+    actions.appendChild(keep);
+    card.appendChild(actions);
+
+    root.appendChild(card);
+  }
+}
+
+function setNsvDecision(feIdx, enable) {
+  // fineEditsDisabled = which fine-edits the user has chosen to KEEP (not delete).
+  // enable=true → user wants to delete this NSV → ensure NOT in disabled set.
+  if (enable) {
+    fineEditsDisabled.delete(feIdx);
+  } else {
+    fineEditsDisabled.add(feIdx);
+  }
+  const card = document.querySelector('.nsv-card[data-fe-idx="' + feIdx + '"]');
+  if (card) {
+    card.classList.toggle('nsv-confirmed', enable);
+    card.classList.toggle('nsv-kept', !enable);
+  }
+  if (typeof _doSave === 'function') _doSave();
+}
+
+function nsvPlayClip(start, end) {
+  const audio = document.getElementById('audio-original');
+  if (!audio) return;
+  audio.currentTime = Math.max(0, start - 0.6);
+  audio.play();
+  const stopAt = end + 0.6;
+  const onTime = () => {
+    if (audio.currentTime >= stopAt) {
+      audio.pause();
+      audio.removeEventListener('timeupdate', onTime);
+    }
+  };
+  audio.addEventListener('timeupdate', onTime);
+}
+
+renderNsvList();
 
 </script>
 
