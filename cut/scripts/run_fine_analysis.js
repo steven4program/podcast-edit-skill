@@ -746,6 +746,30 @@ for (const ev of (nsvData.events || [])) {
   });
 }
 
+// === Cross-ref: upgrade filler edits that overlap an NSV event ===
+const FILLER_WORDS = new Set(['嗯', '啊', '呃', '對', '哎', '欸', '哦', '噢', '額', '唉']);
+
+const nsvIntervals = (nsvData.events || []).map(ev => ({
+  start: (ev.refined_start ?? ev.start),
+  end: (ev.refined_end ?? ev.end),
+  subtype: ev.type,
+  id: ev.id,
+}));
+
+for (const e of edits) {
+  if (e.type !== 'single_filler' && e.type !== 'consecutive_filler') continue;
+  if (!FILLER_WORDS.has((e.deleteText || '').trim())) continue;
+  // Find any NSV that overlaps this edit's delete range
+  const match = nsvIntervals.find(n =>
+    n.start < e.deleteEnd && n.end > e.deleteStart
+  );
+  if (!match) continue;
+  e.enabled = true;
+  e.needsReview = false;          // override is decisive
+  e.nsvOverride = { nsv_id: match.id, subtype: match.subtype };
+  e.reason = `${e.reason}（Gemini 偵測到此處實為${nsvTypeLabel(match.subtype)}，自動勾選刪除）`;
+}
+
 // Sort edits by time
 edits.sort((a, b) => a.deleteStart - b.deleteStart);
 edits.forEach((e, i) => e.idx = i);
