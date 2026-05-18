@@ -275,6 +275,69 @@ def dedupe_events(events: list[dict], time_window: float = 0.5) -> list[dict]:
     return deduped
 
 
+def load_word_spans(words_json_path: Path) -> list[tuple[float, float]]:
+    """Load subtitles_words.json and return speech-word (start, end) tuples, sorted."""
+    data = json.loads(words_json_path.read_text())
+    if isinstance(data, dict) and "words" in data:
+        data = data["words"]
+    spans = []
+    for w in data:
+        if w.get("isGap") or w.get("isSpeakerLabel"):
+            continue
+        s, e = w.get("start"), w.get("end")
+        if s is None or e is None:
+            continue
+        spans.append((s, e))
+    spans.sort()
+    return spans
+
+
+def classify_zone(start: float, end: float,
+                  spans: list[tuple[float, float]]
+                  ) -> tuple[str, float, float | None, float | None]:
+    """Classify an event by overlap with the speech-word spans.
+
+    Returns (zone, overlap_ratio, prev_word_end, next_word_start).
+    Zones: "pure_gap" (<5% overlap), "partial_overlap" (5-50%), "inside_word" (>=50%).
+    """
+    overlap = 0.0
+    prev_end, next_start = None, None
+    for ws, we in spans:
+        if we <= start:
+            prev_end = we
+            continue
+        if ws >= end:
+            if next_start is None:
+                next_start = ws
+            break
+        overlap += min(we, end) - max(ws, start)
+    duration = max(end - start, 1e-9)
+    ratio = overlap / duration
+    if ratio < 0.05:
+        zone = "pure_gap"
+    elif ratio < 0.5:
+        zone = "partial_overlap"
+    else:
+        zone = "inside_word"
+    return zone, ratio, prev_end, next_start
+
+
+def annotate_events_with_word_context(events: list[dict],
+                                       spans: list[tuple[float, float]]) -> list[dict]:
+    """Add zone / overlap_ratio / prev_word_end / next_word_start to each event."""
+    out = []
+    for ev in events:
+        zone, ratio, prev_end, next_start = classify_zone(ev["start"], ev["end"], spans)
+        out.append({
+            **ev,
+            "zone": zone,
+            "overlap_ratio": round(ratio, 3),
+            "prev_word_end": prev_end,
+            "next_word_start": next_start,
+        })
+    return out
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Detect non-speech vocal events in podcast audio via Gemini."
@@ -313,8 +376,16 @@ def main():
     from google import genai
     client = genai.Client(api_key=api_key)
 
+    words_path = base / "1_transcript" / "subtitles_words.json"
+    if not words_path.exists():
+        print(f"⚠️  {words_path} missing — events will lack zone info.", file=sys.stderr)
+        word_spans = []
+    else:
+        word_spans = load_word_spans(words_path)
+
     raw_events, raw_responses, failed_chunks = scan_audio(audio_path, client)
     events = dedupe_events(raw_events)
+    events = annotate_events_with_word_context(events, word_spans)
     duration = get_audio_duration(audio_path)
     degraded = failed_chunks >= 2
 

@@ -127,5 +127,76 @@ class TestDedupe(unittest.TestCase):
         self.assertEqual([e["start"] for e in result], [1.0, 10.0])
 
 
+from detect_non_speech_vocals_gemini import (
+    load_word_spans, classify_zone, annotate_events_with_word_context,
+)
+
+
+class TestZoneClassification(unittest.TestCase):
+    def setUp(self):
+        # 3 words: [0.0-1.0] "Hello", [2.0-3.0] "World", [5.0-6.0] "End"
+        self.spans = [(0.0, 1.0), (2.0, 3.0), (5.0, 6.0)]
+
+    def test_pure_gap(self):
+        # Event 1.2-1.5 is between word1.end=1.0 and word2.start=2.0
+        zone, ratio, prev_end, next_start = classify_zone(1.2, 1.5, self.spans)
+        self.assertEqual(zone, "pure_gap")
+        self.assertAlmostEqual(ratio, 0.0)
+        self.assertEqual(prev_end, 1.0)
+        self.assertEqual(next_start, 2.0)
+
+    def test_inside_word(self):
+        # Event 0.3-0.7 fully inside word1 [0.0-1.0]
+        zone, ratio, _, _ = classify_zone(0.3, 0.7, self.spans)
+        self.assertEqual(zone, "inside_word")
+        self.assertAlmostEqual(ratio, 1.0)
+
+    def test_partial_overlap(self):
+        # Event 0.8-1.4 covers tail of word1 (0.8-1.0) plus gap (1.0-1.4)
+        # Overlap = 0.2 / total 0.6 = 0.33 → partial_overlap
+        zone, ratio, _, _ = classify_zone(0.8, 1.4, self.spans)
+        self.assertEqual(zone, "partial_overlap")
+        self.assertAlmostEqual(ratio, 0.2 / 0.6, places=3)
+
+    def test_before_first_word(self):
+        zone, ratio, prev_end, next_start = classify_zone(0.0, 0.0, self.spans[1:])
+        # No prev_end available
+        self.assertIsNone(prev_end)
+
+    def test_after_last_word(self):
+        zone, ratio, prev_end, next_start = classify_zone(7.0, 7.5, self.spans)
+        self.assertEqual(zone, "pure_gap")
+        self.assertIsNone(next_start)
+
+
+class TestAnnotate(unittest.TestCase):
+    def test_annotates_events(self):
+        spans = [(0.0, 1.0), (2.0, 3.0)]
+        events = [{"start": 1.2, "end": 1.5, "type": "throat_clear", "confidence": 0.8}]
+        annotated = annotate_events_with_word_context(events, spans)
+        self.assertEqual(annotated[0]["zone"], "pure_gap")
+        self.assertIn("overlap_ratio", annotated[0])
+        self.assertIn("prev_word_end", annotated[0])
+        self.assertIn("next_word_start", annotated[0])
+
+
+class TestLoadWordSpans(unittest.TestCase):
+    def test_loads_speech_words_only(self):
+        import tempfile, json as _json
+        data = {"words": [
+            {"start": 0.0, "end": 1.0, "text": "嗨", "isGap": False},
+            {"start": 1.0, "end": 1.5, "text": "", "isGap": True},
+            {"start": 1.5, "end": 2.5, "text": "你好", "isGap": False},
+        ]}
+        with tempfile.NamedTemporaryFile("w", suffix=".json", delete=False) as f:
+            _json.dump(data, f)
+            path = Path(f.name)
+        try:
+            spans = load_word_spans(path)
+            self.assertEqual(spans, [(0.0, 1.0), (1.5, 2.5)])
+        finally:
+            path.unlink()
+
+
 if __name__ == "__main__":
     unittest.main()
