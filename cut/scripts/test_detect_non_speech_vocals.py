@@ -10,6 +10,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from detect_non_speech_vocals_gemini import (
     parse_json_response, normalize_confidence, build_chunks,
+    dedupe_events,  # added in Task 4
 )
 
 
@@ -88,6 +89,42 @@ class TestBuildChunks(unittest.TestCase):
             # Overlap = previous.end - next.start = 30 - 25 = 5
             overlap = a[1] - b[0]
             self.assertAlmostEqual(overlap, 5, places=1)
+
+
+class TestDedupe(unittest.TestCase):
+    def test_empty(self):
+        self.assertEqual(dedupe_events([]), [])
+
+    def test_no_overlap_preserved(self):
+        events = [
+            {"start": 1.0, "end": 1.3, "type": "throat_clear", "confidence": 0.8},
+            {"start": 10.0, "end": 10.3, "type": "throat_clear", "confidence": 0.7},
+        ]
+        self.assertEqual(len(dedupe_events(events)), 2)
+
+    def test_overlap_within_threshold_keeps_higher_conf(self):
+        events = [
+            {"start": 5.0, "end": 5.3, "type": "throat_clear", "confidence": 0.6},
+            {"start": 5.2, "end": 5.5, "type": "throat_clear", "confidence": 0.9},
+        ]
+        result = dedupe_events(events)
+        self.assertEqual(len(result), 1)
+        self.assertEqual(result[0]["confidence"], 0.9)
+
+    def test_different_types_not_merged(self):
+        events = [
+            {"start": 5.0, "end": 5.3, "type": "throat_clear", "confidence": 0.8},
+            {"start": 5.2, "end": 5.5, "type": "nose_clear", "confidence": 0.8},
+        ]
+        self.assertEqual(len(dedupe_events(events)), 2)
+
+    def test_unsorted_input_sorted(self):
+        events = [
+            {"start": 10.0, "end": 10.3, "type": "throat_clear", "confidence": 0.8},
+            {"start": 1.0, "end": 1.3, "type": "throat_clear", "confidence": 0.8},
+        ]
+        result = dedupe_events(events)
+        self.assertEqual([e["start"] for e in result], [1.0, 10.0])
 
 
 if __name__ == "__main__":

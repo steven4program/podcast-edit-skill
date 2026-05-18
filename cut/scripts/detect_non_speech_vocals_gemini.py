@@ -256,6 +256,25 @@ def scan_audio(audio_path: Path, client) -> tuple[list[dict], list[dict], int]:
     return events, raw_responses, failed_chunks
 
 
+def dedupe_events(events: list[dict], time_window: float = 0.5) -> list[dict]:
+    """Merge overlapping events of the same type from adjacent chunks.
+
+    Two events of the same type with start times within `time_window`
+    seconds are collapsed; we keep the higher-confidence one.
+    """
+    sorted_events = sorted(events, key=lambda x: x["start"])
+    deduped: list[dict] = []
+    for ev in sorted_events:
+        if (deduped
+                and ev["start"] - deduped[-1]["start"] < time_window
+                and ev["type"] == deduped[-1]["type"]):
+            if ev["confidence"] > deduped[-1]["confidence"]:
+                deduped[-1] = ev
+            continue
+        deduped.append(ev)
+    return deduped
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Detect non-speech vocal events in podcast audio via Gemini."
@@ -294,15 +313,16 @@ def main():
     from google import genai
     client = genai.Client(api_key=api_key)
 
-    events, raw_responses, failed_chunks = scan_audio(audio_path, client)
+    raw_events, raw_responses, failed_chunks = scan_audio(audio_path, client)
+    events = dedupe_events(raw_events)
     duration = get_audio_duration(audio_path)
     degraded = failed_chunks >= 2
 
     # Write debug raw responses
     raw_out.write_text(json.dumps({"chunks": raw_responses}, ensure_ascii=False, indent=2))
 
-    # NOTE: dedup, cross-ref, refinement, and filters added in Tasks 3-9.
-    # For now, write the events as-is so we can validate the chunking loop end-to-end.
+    # NOTE: cross-ref, refinement, and filters added in Tasks 5-9.
+    # For now, write the deduplicated events so we can validate end-to-end.
     final_out.write_text(json.dumps({
         "audio": str(audio_path.relative_to(base)),
         "duration": duration,
@@ -314,7 +334,7 @@ def main():
         "stats": {
             "total_chunks": len(build_chunks(duration)),
             "failed_chunks": failed_chunks,
-            "raw_events": len(events),
+            "raw_events": len(raw_events),
             "after_dedup": len(events),
             "after_filters": len(events),
             "by_type": _count_by_type(events),
