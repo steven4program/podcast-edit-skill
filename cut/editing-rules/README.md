@@ -20,6 +20,7 @@ Universal editing rules shared by all users. Language patterns, detection algori
 | `8-self-correction.md` | preference | partial repeat, negation correction, word interrupted |
 | `9-residual-sentence.md` | preference | sentence cut off mid-way |
 | `10-content-analysis-methodology.md` | methodology | 5a paragraph-level content analysis |
+| `11-non-speech-vocal.md` | preference | Gemini 偵測清喉嚨/清鼻子 + 4 filter + needsReview |
 | `llm-fine-edit-prompt-template.md` | **LLM guide** | **5b LLM-layer detection checklist and prompt template** |
 
 ## AI review priority
@@ -31,6 +32,7 @@ Universal editing rules shared by all users. Language patterns, detection algori
 5. **Stutter** → delete the earlier (fixed list + any adjacent identical words)
 6. **Self-correction** → delete the earlier (partial repeat, negation, word interrupted)
 7. **Filler** → mark for human confirmation (嗯/啊/呃)
+8. **Non-speech vocal** → Gemini 偵測 + 4 filter + 強制 needsReview（清喉嚨/清鼻子）
 
 ## Core principle
 
