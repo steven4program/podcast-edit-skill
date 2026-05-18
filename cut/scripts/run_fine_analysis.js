@@ -736,8 +736,10 @@ for (const ev of (nsvData.events || [])) {
     deleteStart: parseFloat(dStart.toFixed(2)),
     deleteEnd: parseFloat(dEnd.toFixed(2)),
     reason: `${nsvTypeLabel(ev.type)}（Gemini 偵測）${ev.description ? '：' + ev.description : ''}`,
-    needsReview: true,
-    enabled: false,                                     // default: don't delete; user confirms
+    // auto_enable=true comes from detector when confidence ≥ user's auto_delete_threshold
+    // (defaults to 0.99, so effectively off). Skips human review for high-conf events.
+    needsReview: !ev.auto_enable,
+    enabled: ev.auto_enable === true,
     confidence: ev.confidence,
     source: 'gemini',
     nsv_id: ev.id,
@@ -756,6 +758,11 @@ const nsvIntervals = (nsvData.events || []).map(ev => ({
   id: ev.id,
 }));
 
+// Track which NSV ids got absorbed into a filler edit, so we can suppress
+// the duplicate NSV emission below — the time region is already covered by
+// the filler edit, and showing a separate NSV card whose decision has no
+// real effect is misleading.
+const nsvAbsorbedByFiller = new Set();
 for (const e of edits) {
   if (e.type !== 'single_filler' && e.type !== 'consecutive_filler') continue;
   if (!FILLER_WORDS.has((e.deleteText || '').trim())) continue;
@@ -768,6 +775,21 @@ for (const e of edits) {
   e.needsReview = false;          // override is decisive
   e.nsvOverride = { nsv_id: match.id, subtype: match.subtype };
   e.reason = `${e.reason}（Gemini 偵測到此處實為${nsvTypeLabel(match.subtype)}，自動勾選刪除）`;
+  nsvAbsorbedByFiller.add(match.id);
+}
+
+// Suppress NSV edits whose time region is already covered by a filler edit.
+// The user can no longer "keep" them via the NSV card (the filler edit will
+// cut anyway), so showing the card just confuses the audit trail.
+if (nsvAbsorbedByFiller.size > 0) {
+  const before = edits.length;
+  for (let i = edits.length - 1; i >= 0; i--) {
+    const e = edits[i];
+    if (e.type === 'non_speech_vocal' && nsvAbsorbedByFiller.has(e.nsv_id)) {
+      edits.splice(i, 1);
+    }
+  }
+  console.log(`   抑制 ${before - edits.length} 個 NSV edits（已由 filler override 接管）`);
 }
 
 // Sort edits by time

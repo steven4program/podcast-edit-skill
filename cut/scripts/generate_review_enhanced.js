@@ -174,6 +174,12 @@ for (let i = 0; i < sentences.length; i++) {
       reason: fe.reason || ''
     };
 
+    // Pass through `enabled` only when explicitly set (e.g. NSV edits default
+    // to enabled:false so the user must confirm before they get cut).
+    if (fe.enabled !== undefined) {
+      feEntry.enabled = fe.enabled;
+    }
+
     if (fe.type === 'single_filler' || fe.type === 'residual_sentence') {
       feEntry.wholeSentence = true;
     }

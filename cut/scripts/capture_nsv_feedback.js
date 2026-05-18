@@ -69,11 +69,29 @@ if (!fs.existsSync(userDir)) {
   process.exit(2);
 }
 
+// Strict: only accept entries that were exported by a new-version review HTML
+// (which always writes explicit:true). Pre-fix exports lack the field and may
+// contain untouched defaults disguised as decisions — reject them so the
+// feedback log never gets polluted with non-decisions.
+const explicit = nsv.filter(d => d.explicit === true);
+const dropped = nsv.length - explicit.length;
+if (dropped > 0) {
+  console.warn(
+    `  ⚠️  skipped ${dropped} entries missing explicit:true (probably from a` +
+    ` pre-fix review HTML — re-export from the latest review_enhanced.html` +
+    ` so untouched NSV defaults are not recorded as user decisions).`
+  );
+}
+if (explicit.length === 0) {
+  console.log('No explicit NSV decisions in feedback file — nothing to log.');
+  process.exit(0);
+}
+
 const logPath = path.join(userDir, 'non_speech_vocal_feedback.jsonl');
 const out = fs.createWriteStream(logPath, { flags: 'a' });
-for (const dec of nsv) {
+for (const dec of explicit) {
   out.write(JSON.stringify(dec) + '\n');
 }
 out.end();
 
-console.log(`✅ appended ${nsv.length} NSV decisions to ${logPath}`);
+console.log(`✅ appended ${explicit.length} NSV decisions to ${logPath}`);

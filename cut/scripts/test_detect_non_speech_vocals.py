@@ -233,5 +233,77 @@ class TestRefineEventBoundary(unittest.TestCase):
         self.assertLessEqual(refined_end, len(self.audio) / self.sr)
 
 
+from detect_non_speech_vocals_gemini import load_user_prefs, NSV_PREF_DEFAULTS
+
+
+class TestLoadUserPrefs(unittest.TestCase):
+    """Verify prefs loading actually honors user overrides (not silently defaults)."""
+
+    # Use a sentinel user id that won't collide with real users.
+    TEST_USER = "_pytest_nsv_user_xyz"
+
+    @classmethod
+    def _user_dir(cls):
+        """Compute the same prefs path the detector uses, for the test user."""
+        # Mirror load_user_prefs's path resolution: <script>/../user-prefs/<id>/
+        import detect_non_speech_vocals_gemini as mod
+        return Path(mod.__file__).resolve().parent.parent / "user-prefs" / cls.TEST_USER
+
+    def setUp(self):
+        d = self._user_dir()
+        if d.exists():
+            import shutil
+            shutil.rmtree(d)
+
+    def tearDown(self):
+        d = self._user_dir()
+        if d.exists():
+            import shutil
+            shutil.rmtree(d)
+
+    def _write(self, body: str):
+        d = self._user_dir()
+        d.mkdir(parents=True)
+        (d / "preferences.yaml").write_text(body)
+
+    def test_missing_user_returns_defaults(self):
+        # No file → defaults
+        self.assertEqual(load_user_prefs(self.TEST_USER), NSV_PREF_DEFAULTS)
+
+    def test_missing_section_returns_defaults(self):
+        # File exists but has no non_speech_vocal section
+        self._write("meta:\n  user_id: x\n")
+        self.assertEqual(load_user_prefs(self.TEST_USER), NSV_PREF_DEFAULTS)
+
+    def test_enabled_false_overrides_default(self):
+        # Critical: this is the silent-fallback bug we're guarding against.
+        self._write(
+            "non_speech_vocal:\n"
+            "  enabled: false\n"
+        )
+        prefs = load_user_prefs(self.TEST_USER)
+        self.assertEqual(prefs["enabled"], False)
+        # Unset keys still default
+        self.assertEqual(prefs["detect_types"], NSV_PREF_DEFAULTS["detect_types"])
+
+    def test_threshold_overrides(self):
+        self._write(
+            "non_speech_vocal:\n"
+            "  confidence_threshold: 0.7\n"
+            "  auto_delete_threshold: 0.85\n"
+            "  detect_types: [throat_clear]\n"
+        )
+        prefs = load_user_prefs(self.TEST_USER)
+        self.assertEqual(prefs["confidence_threshold"], 0.7)
+        self.assertEqual(prefs["auto_delete_threshold"], 0.85)
+        self.assertEqual(prefs["detect_types"], ["throat_clear"])
+        self.assertEqual(prefs["enabled"], True)  # still default
+
+    def test_yaml_parse_error_falls_back(self):
+        # Malformed YAML → YAMLError path → defaults (still safer than crashing)
+        self._write(":::not valid yaml:::\n  - [unclosed")
+        self.assertEqual(load_user_prefs(self.TEST_USER), NSV_PREF_DEFAULTS)
+
+
 if __name__ == "__main__":
     unittest.main()

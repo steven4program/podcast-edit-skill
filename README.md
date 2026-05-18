@@ -17,6 +17,7 @@ This agent uses Claude's semantic understanding for content analysis, local Whis
 - Local transcription + AI analysis + interactive review → final MP3
 - Optional OpenAI path remains available when API diarization is preferred
 - Paragraph-level content trimming + word-level fine cut (stutters, self-corrections, fillers)
+- Gemini-based non-speech vocal review for throat clearing and nose clearing (Stage 2.4)
 - In-browser real-time playback with every edit applied instantly
 
 ## Install
@@ -77,7 +78,8 @@ Detailed install steps: `/podcast-edit-install`.
     │  ├─ transcribe (local Whisper by default)
     │  ├─ speaker labels + sentence split
     │  ├─ AI rough-cut (paragraph-level)
-    │  └─ AI fine-cut (word-level: stutter, self-correction, filler)
+    │  ├─ AI fine-cut (word-level: stutter, self-correction, filler)
+    │  └─ Gemini non-speech vocal detection (throat_clear / nose_clear)
     │
     │  Stage 3: AI self-review
     │  └─ review agent checks consistency, misdetection, sensitive words
@@ -145,6 +147,10 @@ podcast-edit-skill/
 │   │   ├── generate_review_enhanced.js
 │   │   ├── generate_review_final.js
 │   │   ├── capture_final_feedback.js
+│   │   ├── detect_non_speech_vocals_gemini.py
+│   │   ├── non_speech_vocal_filters.py
+│   │   ├── capture_nsv_feedback.js
+│   │   ├── validate_nsv_pipeline.sh
 │   │   ├── cut_audio.py
 │   │   ├── trim_silences.py
 │   │   ├── merge_llm_fine.js
@@ -179,6 +185,8 @@ podcast-edit-skill/
             ├── review_enhanced.html
             └── review_final.html
 ```
+
+Non-speech vocal detection (Stage 2.4) requires `GEMINI_API_KEY` in `.env`. Tunable per-user via `cut/user-prefs/<userId>/preferences.yaml` → `non_speech_vocal:` (enabled, detect_types, confidence_threshold, auto_delete_threshold). See `cut/editing-rules/11-non-speech-vocal.md` for detection logic and `docs/superpowers/specs/2026-05-18-non-speech-vocal-detection-design.md` for why Gemini (spike found YAMNet/Whisper/SenseVoice all hit 0% recall on Mandarin throat-clears).
 
 ## Two-tier learning
 

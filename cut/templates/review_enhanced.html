@@ -1037,6 +1037,8 @@ __SPEAKER_STYLES__
 .nsv-card { border: 1px solid #2f3742; padding: 10px 12px; margin: 8px 0; border-radius: 6px; }
 .nsv-card.nsv-confirmed { background: rgba(111, 207, 151, 0.1); border-color: #6fcf97; }
 .nsv-card.nsv-kept { background: rgba(235, 87, 87, 0.08); border-color: #eb5757; }
+.nsv-card.nsv-auto-confirmed { background: rgba(86, 156, 214, 0.08); border-color: #569cd6; }
+.nsv-auto-tag { color: #569cd6; font-size: 12px; font-weight: 600; }
 .nsv-head { display: flex; gap: 12px; align-items: center; font-size: 13px; }
 .nsv-time { font-family: ui-monospace, monospace; }
 .nsv-type.type-throat_clear { color: #eb5757; font-weight: 600; }
@@ -1255,6 +1257,9 @@ sentencesData.forEach(s => {
   // Fine edits (primary)
   if (s.fineEdit) {
     const fe = s.fineEdit;
+    // Server-provided `enabled` wins when explicitly set to false (e.g. NSV).
+    // Defaults to true for all other fine-edit types to preserve existing behavior.
+    const initEnabled = fe.enabled !== false;
     const seg = {
       id: 'fe-' + fe.idx,
       sentenceIdx: s.idx,
@@ -1263,8 +1268,8 @@ sentencesData.forEach(s => {
       source: '5b',
       type: fe.type,
       scope: fe.wholeSentence ? 'whole' : 'partial',
-      enabled: true,
-      isOriginal: true,
+      enabled: initEnabled,
+      isOriginal: initEnabled,
       feIdx: fe.idx,
       deleteText: fe.deleteText || '',
       keepText: fe.keepText || '',
@@ -1279,6 +1284,7 @@ sentencesData.forEach(s => {
   // Extra fine edits
   if (s.extraFineEdits) {
     s.extraFineEdits.forEach(ef => {
+      const initEnabled = ef.enabled !== false;
       const seg = {
         id: 'fe-' + ef.idx,
         sentenceIdx: s.idx,
@@ -1287,8 +1293,8 @@ sentencesData.forEach(s => {
         source: '5b',
         type: ef.type,
         scope: 'partial',
-        enabled: true,
-        isOriginal: true,
+        enabled: initEnabled,
+        isOriginal: initEnabled,
         feIdx: ef.idx,
         deleteText: ef.deleteText || '',
         keepText: ef.keepText || '',
@@ -1339,6 +1345,11 @@ const userRemovedDeletions = new Set();
 const fineEditsOriginal = new Set();
 const fineEditsDisabled = new Set();
 const fineEditsReEnabled = new Set(); // kept for compat
+// Tracks which NSV cards the user explicitly clicked ✅/❌. Untouched cards
+// must NOT be recorded as decisions in the exported feedback log. Declared
+// here (not in the NSV section near line 4630) so restoreState() can reach
+// it through the temporal-dead-zone.
+const nsvTouched = new Set();
 
 // Initialize fineEditsOriginal from segments
 segments.forEach(seg => {
@@ -2069,6 +2080,8 @@ function _doSave() {
       userAdded: Array.from(userAddedDeletions),
       userRemoved: Array.from(userRemovedDeletions),
       fineEditsDisabled: Array.from(fineEditsDisabled),
+      // Persist explicit NSV touch-decisions so they survive page refresh
+      nsvTouched: typeof nsvTouched !== 'undefined' ? Array.from(nsvTouched) : [],
       manualEdits: manualEdits.map(e => ({
         id: e.id, sentenceIdx: e.sentenceIdx,
         deleteText: e.deleteText, disabled: e.disabled,
@@ -2180,6 +2193,14 @@ function restoreState() {
       }
 
       if (changed) syncLegacySets();
+    }
+
+    // Restore NSV touched-decisions (all versions: V4 segmentOverrides also
+    // captures the enable/disable state, but nsvTouched lives in its own Set
+    // so it must be restored independently regardless of which branch ran).
+    if (state.nsvTouched && state.nsvTouched.length > 0 && state.ts >= _GEN_TS
+        && typeof nsvTouched !== 'undefined') {
+      state.nsvTouched.forEach(feIdx => nsvTouched.add(feIdx));
     }
 
     // Restore manual edits (all versions)
@@ -2494,6 +2515,39 @@ function undo() {
       const sent = sentencesData.find(s => s.idx === idx);
       if (sent) rebuildRowText(sent);
     });
+  } else if (action.type === 'nsvDecision') {
+    // Undo an NSV ✅/❌ click: restore segment.enabled, the touched-set
+    // membership, AND the card's visual class — must keep all three in
+    // sync so the export log doesn't show "confirmed visually but reject
+    // by enabled-state".
+    action.segChanges.forEach(c => {
+      const seg = segmentById[c.id];
+      if (seg) seg.enabled = c.wasEnabled;
+    });
+    if (action.wasTouched) {
+      nsvTouched.add(action.feIdx);
+    } else {
+      nsvTouched.delete(action.feIdx);
+    }
+    syncLegacySets();
+    if (typeof invalidateSkipRanges === 'function') invalidateSkipRanges();
+    const _nsvUndoAudio = document.getElementById('audio-original');
+    if (typeof cutMode !== 'undefined' && cutMode && _nsvUndoAudio && !_nsvUndoAudio.paused
+        && typeof skipIfNeeded === 'function') {
+      skipIfNeeded();
+    }
+    // Refresh card class to reflect restored state
+    const card = document.querySelector('.nsv-card[data-fe-idx="' + action.feIdx + '"]');
+    if (card) {
+      card.classList.remove('nsv-confirmed', 'nsv-kept');
+      if (nsvTouched.has(action.feIdx)) {
+        const segNow = segments.find(s => s.feIdx === action.feIdx);
+        const enabledNow = segNow ? segNow.enabled : false;
+        card.classList.add(enabledNow ? 'nsv-confirmed' : 'nsv-kept');
+      }
+    }
+    if (typeof updateStats === 'function') updateStats();
+    if (typeof autoSave === 'function') autoSave();
   } else if (action.type === 'deletion') {
     // Legacy: sentence toggle (keep for backward compat with old undo entries)
     if (action.wasDeleted) {
@@ -4117,7 +4171,10 @@ rebuildRowWithManualEdits = function(sentenceIdx) {
 };
 
 function exportFeedback() {
-  const _hasNsvChanges = (typeof nsvEdits !== 'undefined' && nsvEdits.length > 0);
+  // Only count NSV as "has changes" if the user actually touched a card —
+  // otherwise the mere presence of NSV candidates would auto-trigger export
+  // and pollute the feedback log with untouched defaults.
+  const _hasNsvChanges = (typeof nsvTouched !== 'undefined' && nsvTouched.size > 0);
   const hasData = missedCatches.length > 0 || comments.length > 0 || restoreFeedback.length > 0
     || userAddedDeletions.size > 0 || userRemovedDeletions.size > 0
     || _hasNsvChanges;
@@ -4170,17 +4227,23 @@ function exportFeedback() {
       added_deletions: addedDeletions,
       removed_deletions: removedDeletions
     },
-    nsv_decisions: (typeof nsvEdits !== 'undefined' ? nsvEdits : []).map(nsv => ({
-      nsv_id: nsv.nsv_id,
-      subtype: nsv.subtype,
-      start: nsv.start,
-      end: nsv.end,
-      confidence: nsv.confidence,
-      description: nsv.description,
-      filter_decision: nsv.filter_decision,
-      user_decision: fineEditsDisabled.has(nsv.feIdx) ? 'reject' : 'confirm',
-      timestamp: new Date().toISOString(),
-    })),
+    // Only export NSV cards the user explicitly decided on (clicked ✅ or ❌).
+    // Untouched cards = no user opinion → omit from feedback log entirely
+    // to avoid recording defaults as "user decisions".
+    nsv_decisions: (typeof nsvEdits !== 'undefined' ? nsvEdits : [])
+      .filter(nsv => nsvTouched.has(nsv.feIdx))
+      .map(nsv => ({
+        nsv_id: nsv.nsv_id,
+        subtype: nsv.subtype,
+        start: nsv.start,
+        end: nsv.end,
+        confidence: nsv.confidence,
+        description: nsv.description,
+        filter_decision: nsv.filter_decision,
+        user_decision: fineEditsDisabled.has(nsv.feIdx) ? 'reject' : 'confirm',
+        explicit: true,  // always true now (untouched cards never reach here)
+        timestamp: new Date().toISOString(),
+      })),
     summary: {
       total_missed: missedCatches.length,
       total_comments: comments.length,
@@ -4622,6 +4685,8 @@ document.addEventListener('mousedown', function(e) {
 
 // === Non-speech vocal review section ===
 const nsvEdits = __NSV_EDITS__;  // injected by generate_review_enhanced.js
+// nsvTouched is declared earlier in the script (near fineEditsDisabled) so
+// it's accessible from restoreState() — see the comment there.
 
 function renderNsvList() {
   const root = document.getElementById('nsv-list');
@@ -4635,8 +4700,20 @@ function renderNsvList() {
     return;
   }
   for (const nsv of nsvEdits) {
+    // Four visual states:
+    //   untouched + disabled    → neutral (no class) — user hasn't decided
+    //   untouched + enabled     → nsv-auto-confirmed (high-conf auto-deleted
+    //                              by detector via auto_delete_threshold)
+    //   touched + enabled       → nsv-confirmed (user confirmed delete)
+    //   touched + disabled      → nsv-kept (user explicitly chose to keep)
+    const seg = segments.find(s => s.feIdx === nsv.feIdx);
+    const touched = nsvTouched.has(nsv.feIdx);
+    const curEnabled = seg ? seg.enabled : false;
+    let extraClass = '';
+    if (touched) extraClass = curEnabled ? ' nsv-confirmed' : ' nsv-kept';
+    else if (curEnabled) extraClass = ' nsv-auto-confirmed';
     const card = document.createElement('div');
-    card.className = 'nsv-card';
+    card.className = 'nsv-card' + extraClass;
     card.dataset.feIdx = nsv.feIdx;
 
     const head = document.createElement('div');
@@ -4658,6 +4735,14 @@ function renderNsvList() {
       w.className = 'nsv-warning';
       w.textContent = '⚠ 邊界過緊，剪輯易產生 artifact';
       head.appendChild(w);
+    }
+    // Surface the auto-confirmed state — without this the user has no visual
+    // cue that a high-confidence event was auto-enabled by the detector.
+    if (!touched && curEnabled) {
+      const a = document.createElement('span');
+      a.className = 'nsv-auto-tag';
+      a.textContent = '🤖 高信心自動勾選';
+      head.appendChild(a);
     }
     card.appendChild(head);
 
@@ -4691,19 +4776,57 @@ function renderNsvList() {
 }
 
 function setNsvDecision(feIdx, enable) {
-  // fineEditsDisabled = which fine-edits the user has chosen to KEEP (not delete).
-  // enable=true → user wants to delete this NSV → ensure NOT in disabled set.
-  if (enable) {
-    fineEditsDisabled.delete(feIdx);
-  } else {
-    fineEditsDisabled.add(feIdx);
+  // Mirror toggleFineEdit()'s sync pattern so the in-flight playback/skip
+  // cache and stats stay consistent. Just mutating seg.enabled without
+  // invalidateSkipRanges() leaves cut-mode playing the old skip plan.
+  const matching = segments.filter(s => s.feIdx === feIdx);
+  if (matching.length === 0) return;
+
+  const newEnabled = !!enable;
+  // Capture both pieces of pre-action state for a clean undo:
+  //   - wasTouched: whether this card was already in nsvTouched
+  //   - segChanges: prior enabled state per matching segment
+  // Use a dedicated 'nsvDecision' undo type rather than 'segmentBatch' so
+  // the undo handler can also restore the touched set + refresh card class.
+  const wasTouched = nsvTouched.has(feIdx);
+  undoStack.push({
+    type: 'nsvDecision',
+    feIdx: feIdx,
+    wasTouched: wasTouched,
+    segChanges: matching.map(seg => ({ id: seg.id, wasEnabled: seg.enabled })),
+  });
+  // Mark as explicitly decided — this is what distinguishes a user-touched
+  // card from the default-preserved (untouched) state in the export log.
+  nsvTouched.add(feIdx);
+  matching.forEach(seg => { seg.enabled = newEnabled; });
+
+  syncLegacySets();
+  if (typeof invalidateSkipRanges === 'function') invalidateSkipRanges();
+
+  // If cut-mode is playing, reschedule skip to reflect the change immediately
+  const _nsvAudio = document.getElementById('audio-original');
+  if (typeof cutMode !== 'undefined' && cutMode && _nsvAudio && !_nsvAudio.paused
+      && typeof skipIfNeeded === 'function') {
+    skipIfNeeded();
   }
+
+  // Rebuild affected sentence rows (NSV has empty deleteText so this is a
+  // near-no-op for visual content, but keeps the contract symmetric with
+  // toggleFineEdit and future-proofs us against richer NSV rendering)
+  const affectedSentIdxs = new Set(matching.map(seg => seg.sentenceIdx));
+  for (const sIdx of affectedSentIdxs) {
+    const s = sentencesData.find(s => s.idx === sIdx);
+    if (s && typeof rebuildRowText === 'function') rebuildRowText(s);
+  }
+
+  if (typeof updateStats === 'function') updateStats();
+
   const card = document.querySelector('.nsv-card[data-fe-idx="' + feIdx + '"]');
   if (card) {
-    card.classList.toggle('nsv-confirmed', enable);
-    card.classList.toggle('nsv-kept', !enable);
+    card.classList.toggle('nsv-confirmed', newEnabled);
+    card.classList.toggle('nsv-kept', !newEnabled);
   }
-  if (typeof _doSave === 'function') _doSave();
+  if (typeof autoSave === 'function') autoSave();
 }
 
 function nsvPlayClip(start, end) {

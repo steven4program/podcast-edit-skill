@@ -74,8 +74,20 @@ else
 fi
 
 REQUIRED_EVENT_KEYS=(id start end type confidence zone refined_start refined_end filter_decision)
-MISSING=$(jq -r ".events[] | [.id, .start, .type, .refined_start, .filter_decision] | join(\" \")" "$NSV_JSON" | head -1)
-echo "  sample event: $MISSING"
+EVENT_KEY_FAIL=0
+for k in "${REQUIRED_EVENT_KEYS[@]}"; do
+  # Every event must have the key (jq's `has` returns false for missing keys; null counts as present)
+  MISSING_COUNT=$(jq "[.events[] | has(\"$k\") | not] | map(select(.)) | length" "$NSV_JSON")
+  if [[ "$MISSING_COUNT" -gt 0 ]]; then
+    fail "event key '$k' missing from $MISSING_COUNT event(s)"
+    EVENT_KEY_FAIL=1
+  fi
+done
+if [[ $EVENT_KEY_FAIL -eq 0 ]]; then
+  ok "all events have required keys (${#REQUIRED_EVENT_KEYS[@]} keys checked across $N_EVENTS events)"
+fi
+SAMPLE=$(jq -r ".events[] | [.id, .start, .type, .refined_start, .filter_decision] | join(\" \")" "$NSV_JSON" | head -1)
+echo "  sample event: $SAMPLE"
 
 # --- 5. Only throat_clear / nose_clear remain after filters ---
 ALLOWED=$(jq -r '.events | map(.type) | unique | sort | tostring' "$NSV_JSON")
@@ -104,6 +116,8 @@ else
 fi
 
 # --- 7. Graceful failure when GEMINI_API_KEY missing ---
+# Use NSV_SKIP_DOTENV=1 + unset GEMINI_API_KEY to force the missing-key path
+# without ever touching the real .env (safe under SIGKILL / parallel runs).
 echo ""
 echo "→ Testing graceful failure on missing GEMINI_API_KEY..."
 TMP_BASE=$(mktemp -d)
@@ -111,23 +125,8 @@ mkdir -p "$TMP_BASE/1_transcript" "$TMP_BASE/2_analysis"
 cp "$BASE_DIR/1_transcript/audio.mp3" "$TMP_BASE/1_transcript/audio.mp3"
 cp "$BASE_DIR/1_transcript/subtitles_words.json" "$TMP_BASE/1_transcript/subtitles_words.json"
 
-# Move .env aside; ensure it's restored even on error
-ENV_MOVED=false
-if [[ -f "$REPO/.env" ]]; then
-  mv "$REPO/.env" "$REPO/.env.validate_tmp"
-  ENV_MOVED=true
-fi
-restore_env() {
-  if [[ "$ENV_MOVED" == "true" && -f "$REPO/.env.validate_tmp" ]]; then
-    mv "$REPO/.env.validate_tmp" "$REPO/.env"
-  fi
-}
-trap restore_env EXIT
-
-env -u GEMINI_API_KEY "$PYTHON" "$REPO/cut/scripts/detect_non_speech_vocals_gemini.py" "$TMP_BASE"
+env -u GEMINI_API_KEY NSV_SKIP_DOTENV=1 "$PYTHON" "$REPO/cut/scripts/detect_non_speech_vocals_gemini.py" "$TMP_BASE"
 DET_RC=$?
-restore_env
-trap - EXIT
 
 if [[ $DET_RC -eq 0 ]] && jq -e '.degraded == true' "$TMP_BASE/2_analysis/non_speech_vocals.json" > /dev/null 2>&1; then
   ok "graceful failure: degraded=true on missing API key"

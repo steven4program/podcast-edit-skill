@@ -187,7 +187,7 @@ env:
 ```
 You are an audio editor reviewing a clip from a Mandarin Chinese podcast.
 
-The HOST has a recurring problem: brief NON-SPEECH VOCAL noises that listeners 
+The HOST has a recurring problem: brief NON-SPEECH VOCAL noises that listeners
 notice and want removed:
 - 清喉嚨 / throat clearing — a short rasping, wet, or scratching sound (NOT speech)
 - 清鼻子 / nose clearing / snort / sniff — a brief nasal sound
@@ -219,7 +219,7 @@ Be conservative — if uncertain, do NOT flag it.
 
 Return JSON only (no markdown, no commentary):
 {"events": [
-  {"offset_s": 12.3, "duration_s": 0.4, "type": "throat_clear", 
+  {"offset_s": 12.3, "duration_s": 0.4, "type": "throat_clear",
    "confidence": 0.9, "description": "句首濕潤的清喉嚨聲"}
 ]}
 
@@ -235,7 +235,7 @@ If nothing to flag, return: {"events": []}
 ### Confidence normalization
 即使 prompt 要求 numeric，仍要 defensive 處理：
 ```python
-CONF_MAP = {"high": 0.85, "medium": 0.6, "low": 0.4, 
+CONF_MAP = {"high": 0.85, "medium": 0.6, "low": 0.4,
             "very high": 0.95, "very low": 0.2}
 if isinstance(c, str):
     c = CONF_MAP.get(c.lower().strip(), 0.5)
@@ -253,8 +253,8 @@ if isinstance(c, str):
 events.sort(key=lambda x: x["start"])
 deduped = []
 for ev in events:
-    if (deduped and 
-        ev["start"] - deduped[-1]["start"] < 0.5 and 
+    if (deduped and
+        ev["start"] - deduped[-1]["start"] < 0.5 and
         ev["type"] == deduped[-1]["type"]):
         # Keep higher-confidence version
         if ev["confidence"] > deduped[-1]["confidence"]:
@@ -341,7 +341,7 @@ for ev in events:
 ### Loading
 ```javascript
 const nsvPath = path.join(baseDir, '2_analysis/non_speech_vocals.json');
-const nsv = fs.existsSync(nsvPath) 
+const nsv = fs.existsSync(nsvPath)
   ? JSON.parse(fs.readFileSync(nsvPath, 'utf8'))
   : { events: [], degraded: true };
 ```
@@ -376,7 +376,7 @@ const nsv = fs.existsSync(nsvPath)
 function crossRefFillers(nsvEvents, words) {
   const FILLERS = new Set(['嗯','啊','呃','對','哎','欸','哦','噢']);
   for (const ev of nsvEvents) {
-    const overlapping = words.filter(w => 
+    const overlapping = words.filter(w =>
       !w.isGap && w.start < ev.end && w.end > ev.start
       && FILLERS.has(w.text.trim())
     );
@@ -395,16 +395,16 @@ def refine_event_boundary(audio, sr, gem_start, gem_end, padding=0.3):
     s = max(0, gem_start - padding)
     e = min(len(audio)/sr, gem_end + padding)
     region = audio[int(s*sr):int(e*sr)]
-    
+
     # RMS envelope @ 10ms hop
     hop = int(sr * 0.01)
     rms = librosa.feature.rms(y=region, frame_length=int(sr*0.03), hop_length=hop)[0]
     rms_db = 20 * np.log10(rms + 1e-9)
-    
+
     # Find peak inside [gem_start, gem_end] region
     peak_idx = np.argmax(rms_db[int((gem_start-s)/0.01):int((gem_end-s)/0.01)]) \
                + int((gem_start-s)/0.01)
-    
+
     # Walk left from peak until RMS drops 12dB below peak → refined_start
     # Walk right similarly → refined_end
     threshold = rms_db[peak_idx] - 12
@@ -414,7 +414,7 @@ def refine_event_boundary(audio, sr, gem_start, gem_end, padding=0.3):
     right = peak_idx
     while right < len(rms_db) - 1 and rms_db[right] > threshold:
         right += 1
-    
+
     return s + left * 0.01, s + right * 0.01
 ```
 保留 0.03s safety margin（onset leak 既有經驗值，見 `cut/SKILL.md` line 1762）。
