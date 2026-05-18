@@ -249,6 +249,33 @@ function appendEpisode(userId, episode) {
   writeJson(filePath, history);
 }
 
+// --- Nested key helpers (used by `prefs get/set <dotKey>` CLI) ---
+
+function setNestedKey(obj, dotPath, value) {
+  const parts = dotPath.split('.');
+  let cur = obj;
+  for (let i = 0; i < parts.length - 1; i++) {
+    if (cur[parts[i]] === undefined || typeof cur[parts[i]] !== 'object') {
+      cur[parts[i]] = {};
+    }
+    cur = cur[parts[i]];
+  }
+  cur[parts[parts.length - 1]] = value;
+}
+
+function getNestedKey(obj, dotPath) {
+  return dotPath.split('.').reduce((o, k) => (o == null ? undefined : o[k]), obj);
+}
+
+function parseScalar(s) {
+  if (s === 'true') return true;
+  if (s === 'false') return false;
+  if (s === 'null') return null;
+  if (/^-?\d+$/.test(s)) return parseInt(s, 10);
+  if (/^-?\d*\.\d+$/.test(s)) return parseFloat(s);
+  return s;
+}
+
 // --- CLI ---
 
 function printUsage() {
@@ -258,7 +285,9 @@ Commands:
   list                    list all users
   create <userId>         create a new user (clones default/)
   check [userId]          check a user's preference status
-  prefs [userId]          print preferences as JSON
+  prefs [userId]                          print preferences as JSON
+  prefs <userId> get <dotKey>             print a value (e.g. non_speech_vocal.enabled)
+  prefs <userId> set <dotKey> <value>     set a value (auto-parses bool/int/float)
   rules [userId]          print editing-rules summary`);
 }
 
@@ -300,8 +329,38 @@ if (require.main === module) {
       break;
     }
     case 'prefs': {
-      const userId = args[0] || getCurrentUser();
-      console.log(JSON.stringify(loadPreferences(userId), null, 2));
+      // Forms:
+      //   prefs [userId]                  → print all prefs as JSON
+      //   prefs <userId> get <dotKey>     → print one value
+      //   prefs <userId> set <dotKey> <v> → set and save
+      let userId, sub, dotKey, valueRaw;
+      if (args.length >= 3 && (args[1] === 'get' || args[1] === 'set')) {
+        userId = args[0];
+        sub = args[1];
+        dotKey = args[2];
+        valueRaw = args.slice(3).join(' ');
+      } else if (args.length >= 2 && (args[0] === 'get' || args[0] === 'set')) {
+        // Allow `prefs get <key>` to default to current user
+        userId = getCurrentUser();
+        sub = args[0];
+        dotKey = args[1];
+        valueRaw = args.slice(2).join(' ');
+      } else {
+        userId = args[0] || getCurrentUser();
+        sub = null;
+      }
+
+      const prefs = loadPreferences(userId) || {};
+      if (sub === 'get') {
+        const v = getNestedKey(prefs, dotKey);
+        console.log(v === undefined ? '' : (typeof v === 'object' ? JSON.stringify(v) : String(v)));
+      } else if (sub === 'set') {
+        setNestedKey(prefs, dotKey, parseScalar(valueRaw));
+        savePreferences(userId, prefs);
+        console.log(`✅ ${userId}.${dotKey} = ${parseScalar(valueRaw)}`);
+      } else {
+        console.log(JSON.stringify(prefs, null, 2));
+      }
       break;
     }
     case 'rules': {
