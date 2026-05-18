@@ -122,3 +122,37 @@ def filter_speech_artifact_cluster(events: list[dict],
             if marked and (not ev.get("filter_decision") or ev["filter_decision"] == "ok"):
                 ev["filter_decision"] = "speech_artifact_cluster"
     return events
+
+
+# Soft-keep decisions appear in the final list (with a warning); other non-"ok"
+# decisions cause the event to be dropped.
+SOFT_KEEP_DECISIONS = {"boundary_too_tight"}
+
+
+def apply_all_filters(events: list[dict],
+                      words: list[dict],
+                      detect_types: tuple[str, ...] = ("throat_clear", "nose_clear"),
+                      ) -> tuple[list[dict], list[dict]]:
+    """Run the full filter pipeline in spec order.
+
+    Returns (kept_events, dropped_events). `kept_events` may include soft-kept
+    items (boundary_too_tight). `dropped_events` is for diagnostics / debug.
+    """
+    # First: drop events of types not in detect_types
+    for ev in events:
+        if ev["type"] not in detect_types:
+            ev["filter_decision"] = "type_disabled"
+
+    filter_host_describing_sound(events, words)
+    filter_long_gap_subsume(events)
+    filter_speech_artifact_cluster(events)
+    filter_boundary_too_tight(events)
+
+    kept, dropped = [], []
+    for ev in events:
+        decision = ev.get("filter_decision", "ok")
+        if decision == "ok" or decision in SOFT_KEEP_DECISIONS:
+            kept.append(ev)
+        else:
+            dropped.append(ev)
+    return kept, dropped

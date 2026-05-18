@@ -39,6 +39,9 @@ from pathlib import Path
 
 import numpy as np
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from non_speech_vocal_filters import apply_all_filters
+
 CHUNK_SEC = 30
 HOP_SEC = 25
 MODEL = "gemini-2.5-flash"
@@ -461,6 +464,20 @@ def main():
         rs, re_ = refine_event_boundary(audio_data, audio_sr, ev["start"], ev["end"])
         ev["refined_start"] = round(rs, 3)
         ev["refined_end"] = round(re_, 3)
+        ev["filter_decision"] = "ok"  # baseline; filters may override
+
+    # Load Whisper words (with isGap=True entries kept) for filter 1 context check
+    words_full = []
+    if words_path.exists():
+        wd = json.loads(words_path.read_text())
+        if isinstance(wd, dict) and "words" in wd:
+            wd = wd["words"]
+        words_full = wd
+
+    after_dedup_count = len(events)
+    kept, dropped = apply_all_filters(events, words_full,
+                                       detect_types=("throat_clear", "nose_clear"))
+    events = kept
 
     duration = get_audio_duration(audio_path)
     degraded = failed_chunks >= 2
@@ -468,8 +485,9 @@ def main():
     # Write debug raw responses
     raw_out.write_text(json.dumps({"chunks": raw_responses}, ensure_ascii=False, indent=2))
 
-    # NOTE: cross-ref, refinement, and filters added in Tasks 5-9.
-    # For now, write the deduplicated events so we can validate end-to-end.
+    for i, ev in enumerate(events):
+        ev["id"] = f"nsv-{i}"
+
     final_out.write_text(json.dumps({
         "audio": str(audio_path.relative_to(base)),
         "duration": duration,
@@ -482,8 +500,9 @@ def main():
             "total_chunks": len(build_chunks(duration)),
             "failed_chunks": failed_chunks,
             "raw_events": len(raw_events),
-            "after_dedup": len(events),
+            "after_dedup": after_dedup_count,
             "after_filters": len(events),
+            "dropped_count": len(dropped),
             "by_type": _count_by_type(events),
         },
         "events": events,

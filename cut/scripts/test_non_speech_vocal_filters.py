@@ -169,5 +169,48 @@ class TestFilterCluster(unittest.TestCase):
         self.assertTrue(all(e["filter_decision"] == "ok" for e in out))
 
 
+from non_speech_vocal_filters import apply_all_filters
+
+
+class TestApplyAllFilters(unittest.TestCase):
+    def test_keeps_only_enabled_types(self):
+        events = [
+            make_event(10.0, 10.3, "throat_clear"),
+            make_event(15.0, 15.3, "nose_clear"),
+            make_event(20.0, 20.3, "click_smack"),
+            make_event(25.0, 25.3, "sharp_breath"),
+        ]
+        out, dropped = apply_all_filters(events, words=[], detect_types=("throat_clear", "nose_clear"))
+        self.assertEqual({e["type"] for e in out}, {"throat_clear", "nose_clear"})
+        # The 2 dropped events still appear in dropped with reason "type_disabled"
+        type_disabled = [d for d in dropped if d["filter_decision"] == "type_disabled"]
+        self.assertEqual(len(type_disabled), 2)
+
+    def test_runs_all_4_filters_in_order(self):
+        # Same-type cluster of 3 with one in a long gap and one too short
+        events = [
+            make_event(10.0, 10.3, "throat_clear"),
+            make_event(10.5, 10.7, "throat_clear"),
+            make_event(11.0, 11.2, "throat_clear"),
+        ]
+        out, dropped = apply_all_filters(events, words=[],
+                                          detect_types=("throat_clear", "nose_clear"))
+        # All 3 cluster — all dropped
+        self.assertEqual(out, [])
+        self.assertEqual(len(dropped), 3)
+        for d in dropped:
+            self.assertEqual(d["filter_decision"], "speech_artifact_cluster")
+
+    def test_keeps_boundary_too_tight_as_soft_keep(self):
+        ev = make_event(10.0, 10.10, "throat_clear")  # 0.10s duration < 0.15
+        ev["next_word_start"] = 12.0
+        out, dropped = apply_all_filters([ev], words=[],
+                                          detect_types=("throat_clear", "nose_clear"))
+        # boundary_too_tight is a soft-keep — event stays in out
+        self.assertEqual(len(out), 1)
+        self.assertEqual(out[0]["filter_decision"], "boundary_too_tight")
+        self.assertEqual(dropped, [])
+
+
 if __name__ == "__main__":
     unittest.main()
