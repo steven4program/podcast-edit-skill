@@ -70,3 +70,55 @@ def filter_long_gap_subsume(events: list[dict], gap_threshold: float = 3.0) -> l
         if silence_gap > gap_threshold:
             ev["filter_decision"] = "subsumed_by_silence_trim"
     return events
+
+
+def filter_boundary_too_tight(events: list[dict],
+                              min_distance: float = 0.1,
+                              min_duration: float = 0.15) -> list[dict]:
+    """Filter 3 — soft-mark events that are too short or too close to next word.
+
+    Unlike filters 1/2/4, this does NOT remove the event. It marks it so the
+    review UI can show a warning ("too short to cut cleanly") while still
+    surfacing the candidate for the user to consider.
+    """
+    for ev in events:
+        if ev.get("filter_decision") and ev["filter_decision"] != "ok":
+            continue
+        duration = ev["end"] - ev["start"]
+        next_start = ev.get("next_word_start")
+        dist_to_next = (next_start - ev["end"]) if next_start is not None else float("inf")
+        if duration < min_duration or dist_to_next < min_distance:
+            ev["filter_decision"] = "boundary_too_tight"
+    return events
+
+
+def filter_speech_artifact_cluster(events: list[dict],
+                                    window: float = 2.0,
+                                    min_count: int = 3) -> list[dict]:
+    """Filter 4 — drop all events in a same-type cluster of ≥min_count within `window` s.
+
+    Treats clustered same-type events as natural speech artifacts (e.g. continuous
+    mouth-smack noise during speaking), not discrete nuisances.
+    """
+    by_type: dict[str, list[dict]] = {}
+    for ev in events:
+        by_type.setdefault(ev["type"], []).append(ev)
+
+    for etype, lst in by_type.items():
+        lst.sort(key=lambda e: e["start"])
+        # Slide a window
+        n = len(lst)
+        in_cluster = [False] * n
+        i = 0
+        while i < n:
+            j = i
+            while j + 1 < n and (lst[j + 1]["start"] - lst[i]["start"]) <= window:
+                j += 1
+            if (j - i + 1) >= min_count:
+                for k in range(i, j + 1):
+                    in_cluster[k] = True
+            i += 1
+        for ev, marked in zip(lst, in_cluster):
+            if marked and (not ev.get("filter_decision") or ev["filter_decision"] == "ok"):
+                ev["filter_decision"] = "speech_artifact_cluster"
+    return events

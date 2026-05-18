@@ -95,5 +95,79 @@ class TestFilterLongGapSubsume(unittest.TestCase):
         self.assertEqual(out[0]["filter_decision"], "ok")
 
 
+from non_speech_vocal_filters import (
+    filter_boundary_too_tight, filter_speech_artifact_cluster,
+)
+
+
+class TestFilterBoundaryTooTight(unittest.TestCase):
+    def test_keeps_event_with_clear_boundary(self):
+        ev = make_event(10.0, 10.3)
+        ev["next_word_start"] = 11.0  # 0.7s gap to next
+        out = filter_boundary_too_tight([ev])
+        self.assertEqual(out[0]["filter_decision"], "ok")
+
+    def test_marks_event_too_close_to_next_word(self):
+        ev = make_event(10.0, 10.3)
+        ev["next_word_start"] = 10.35  # 0.05s gap
+        out = filter_boundary_too_tight([ev])
+        self.assertEqual(out[0]["filter_decision"], "boundary_too_tight")
+
+    def test_marks_event_too_short(self):
+        ev = make_event(10.0, 10.10)  # 0.10s duration
+        ev["next_word_start"] = 12.0
+        out = filter_boundary_too_tight([ev])
+        self.assertEqual(out[0]["filter_decision"], "boundary_too_tight")
+
+
+class TestFilterCluster(unittest.TestCase):
+    def test_keeps_isolated_events(self):
+        events = [
+            make_event(10.0, 10.3, "click_smack"),
+            make_event(20.0, 20.3, "click_smack"),
+            make_event(30.0, 30.3, "click_smack"),
+        ]
+        out = filter_speech_artifact_cluster(events)
+        self.assertTrue(all(e["filter_decision"] == "ok" for e in out))
+
+    def test_drops_cluster_of_3_within_2s(self):
+        events = [
+            make_event(10.0, 10.3, "click_smack"),
+            make_event(10.5, 10.7, "click_smack"),
+            make_event(11.5, 11.7, "click_smack"),
+        ]
+        out = filter_speech_artifact_cluster(events)
+        for e in out:
+            self.assertEqual(e["filter_decision"], "speech_artifact_cluster")
+
+    def test_drops_cluster_of_4(self):
+        events = [
+            make_event(10.0, 10.2, "click_smack"),
+            make_event(10.5, 10.7, "click_smack"),
+            make_event(11.0, 11.2, "click_smack"),
+            make_event(11.5, 11.7, "click_smack"),
+        ]
+        out = filter_speech_artifact_cluster(events)
+        for e in out:
+            self.assertEqual(e["filter_decision"], "speech_artifact_cluster")
+
+    def test_does_not_cluster_different_types(self):
+        events = [
+            make_event(10.0, 10.3, "throat_clear"),
+            make_event(10.5, 10.7, "nose_clear"),
+            make_event(11.5, 11.7, "throat_clear"),
+        ]
+        out = filter_speech_artifact_cluster(events)
+        self.assertTrue(all(e["filter_decision"] == "ok" for e in out))
+
+    def test_2_in_window_not_dropped(self):
+        events = [
+            make_event(10.0, 10.3, "click_smack"),
+            make_event(10.5, 10.7, "click_smack"),
+        ]
+        out = filter_speech_artifact_cluster(events)
+        self.assertTrue(all(e["filter_decision"] == "ok" for e in out))
+
+
 if __name__ == "__main__":
     unittest.main()
