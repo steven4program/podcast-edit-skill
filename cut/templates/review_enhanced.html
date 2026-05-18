@@ -4117,8 +4117,10 @@ rebuildRowWithManualEdits = function(sentenceIdx) {
 };
 
 function exportFeedback() {
+  const _hasNsvChanges = (typeof nsvEdits !== 'undefined' && nsvEdits.length > 0);
   const hasData = missedCatches.length > 0 || comments.length > 0 || restoreFeedback.length > 0
-    || userAddedDeletions.size > 0 || userRemovedDeletions.size > 0;
+    || userAddedDeletions.size > 0 || userRemovedDeletions.size > 0
+    || _hasNsvChanges;
   if (!hasData) {
     alert('No feedback yet. You can:\n- Select text → mark deleted (record a miss)\n- Select text → add a comment\n- Restore a delete and record a reason');
     return;
@@ -4168,6 +4170,17 @@ function exportFeedback() {
       added_deletions: addedDeletions,
       removed_deletions: removedDeletions
     },
+    nsv_decisions: (typeof nsvEdits !== 'undefined' ? nsvEdits : []).map(nsv => ({
+      nsv_id: nsv.nsv_id,
+      subtype: nsv.subtype,
+      start: nsv.start,
+      end: nsv.end,
+      confidence: nsv.confidence,
+      description: nsv.description,
+      filter_decision: nsv.filter_decision,
+      user_decision: fineEditsDisabled.has(nsv.feIdx) ? 'reject' : 'confirm',
+      timestamp: new Date().toISOString(),
+    })),
     summary: {
       total_missed: missedCatches.length,
       total_comments: comments.length,
