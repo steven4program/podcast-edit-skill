@@ -143,8 +143,10 @@ def extract_keep_segments(src_wav, keep_segs, work_dir, prefix):
 def concat_wavs(segment_files, out_wav):
     list_path = out_wav.parent / f"_concat_{out_wav.stem}.txt"
     with open(list_path, "w") as f:
+        # ffmpeg concat resolves relative paths against the LIST FILE's directory,
+        # not cwd. Use bare filenames since segments live alongside the list.
         for s in segment_files:
-            f.write(f"file '{s.as_posix()}'\n")
+            f.write(f"file '{s.name}'\n")
     subprocess.run(
         ["ffmpeg", "-v", "quiet", "-stats",
          "-f", "concat", "-safe", "0", "-i", str(list_path),

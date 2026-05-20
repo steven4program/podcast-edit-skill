@@ -990,6 +990,53 @@ node "$SKILL_DIR/cut/scripts/append_eval_history.js" \
 
 ---
 
+### Stage 4.5: noise detection (optional, post-review-generation)
+
+> Surfaces non-speech bursts (cough, throat-clear, mic Plop, etc.) as a **review-only panel** appended to `review_enhanced.html`. Does NOT touch `delete_segments.json` — the user picks events to act on from the panel; nothing is auto-deleted.
+
+**Architecture**: single YAMNet pass per track, two filtering passes, anchored on the existing word-level transcript.
+
+- **Pass A (label)**: target classes (`Cough`, `Throat clearing`, `Plop`, `Sniff`, `Tap`, `Thump`, etc.) above `--min-conf` (default 0.40), vetoed when `Speech`/`Laughter` score ≥ `--speech-veto` (0.30).
+- **Pass B (untranscribed burst)**: `Speech` score ≥ `--burst-speech-conf` (0.50) **and** NO speaker has a transcribed word at that frame → likely an untranscribed throat-clear that YAMNet misclassified as speech. Cross-checks every track's words for the veto so backchannels survive.
+- **F0 filter (pyin 70-500 Hz)**: burst events with voiced-frame fraction ≥ `--max-voiced-frac` (default 0.50, wide) get dropped — real speech / "mm-hmm" / laughter have pitch; cough / clear / Plop don't.
+- **Word-gap clamp**: burst events get clamped inside the surrounding inter-word gap minus `--burst-edge-buffer` (default 0.02 s, wide) so they don't bleed into adjacent speech.
+- **RMS tighten**: off by default (`--no-energy-tighten` set); enable when you'd rather over-trim than over-mute.
+
+```bash
+node scripts/run_noise_pipeline.js \
+  --track Hogan=source/hogan-5m.mp3 \
+  --track Ted=source/ted35-01-5m.mp3 \
+  --words output/<run>/cut/1_transcript/subtitles_words.json \
+  --out-dir output/<run>/cut/noise \
+  --review-html output/<run>/cut/review_enhanced.html
+```
+
+Reference baseline on the 5-min Hogan+Ted demo material: **11 events / 14.46 s** (3 Hogan + 8 Ted; Hogan 204.43 Plop label-hit, Ted 22.52 / 243.79 / etc. burst-hits).
+
+`--words` is essentially required — without a transcript, Pass B has no word-gap to anchor on and the burst filter degenerates to "every speech frame is a candidate" (200+ false positives).
+
+Scripts (`cut/scripts/`):
+- `detect_noise_events.py` — the YAMNet dual-pass detector. Output is a JSON array, one entry per event.
+- `run_noise_pipeline.js` — orchestrator. Sets the tuned wide defaults (`--no-energy-tighten`, `--max-voiced-frac 0.50`, `--burst-edge-buffer 0.02`), adapts the array output into `{events: [...]}` for the panel, and calls `inject_noise_panel.js`.
+- `inject_noise_panel.js` — appends a fixed-bottom-right panel to `review_enhanced.html`. Idempotent (removes prior `<!-- NOISE_PANEL_BEGIN/END -->` block before re-injecting). Front-end UI unchanged.
+
+**Optional Gemini second pass** (not in the orchestrator; manual):
+```bash
+python3 scripts/judge_noise_events.py --input audio.mp3 \
+  --events events.json --output events_judged.json
+# verdict becomes confirmed / false_positive / borderline; uses ±1.5 s clips, gemini-2.5-flash
+```
+
+To carry confirmed events through to the cut, run `merge_noise_into_deletes.js` against `2_analysis/delete_segments.json` **before** Stage 5 — Stage 5 itself doesn't read noise events.
+
+**Experimental detectors** (`detect_noise_yamnet_fine.py`, `detect_noise_librosa_onset.py`, `detect_noise_centroid.py`, `detect_noise_lowfreq.py`, `combine_noise_candidates.js`, `refine_noise_events_librosa.py`, `candidates_to_events.js`) are kept for research but **not** wired into the orchestrator — they produce 200+ wide-recall candidates with no F0 / word-gap filtering, which is too noisy for review. Use only for offline tuning.
+
+**Known limits** (from prior tuning sessions):
+- YAMNet 0.96 s window + Whisper word timestamp ±100-200 ms drift means events glued to speech onset/offset will pull a syllable with them. The right knob is `apply` — `cut_audio_multitrack.py` already fades; consider longer fades + partial duck (volume 0.05, not 0) instead of chasing perfect boundaries.
+- Silero VAD was tried as a speech mask; it merged "speech + clear" into one speech blob and dropped real clears. Removed.
+
+---
+
 ### Stage 5: cut execution
 
 > **Interaction rule**: Stage 5 is 5.1 + 5.2 — execute consecutively, report once. Don't show the user intermediate output of 5.1; go straight into 5.2. After both finish, tell the user the final path and duration stats.
