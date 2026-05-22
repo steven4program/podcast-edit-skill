@@ -3,38 +3,63 @@
 Stage 5 multitrack final cut: produce per-speaker solo MP3 + a balanced merged MP3.
 
 For episodes recorded with one audio track per speaker (e.g. Riverside/Zencastr
-multi-track export). Applies the SAME delete_segments to every track so the
-output timelines stay aligned, then:
+multi-track export). Outputs:
 
   - <speaker>_solo.mp3   : per-track cut + dynaudnorm + loudnorm to -16 LUFS
-  - episode_merged.mp3   : measure each track's integrated LUFS, lift the
-                           quieter tracks to the loudest track's level,
-                           amix (no auto-normalization), then loudnorm to -16 LUFS.
+  - episode_merged.mp3   : per-speaker loudness alignment, amix (normalize=0),
+                           then loudnorm to -16 LUFS.
+
+Two input modes:
+
+1. Legacy --delete-segments mode
+   Applies the SAME delete_segments to every track. Simple; cross-talk regions
+   risk losing the non-target speaker's audio.
+
+2. --cut-plan mode (preferred for multitrack)
+   Reads cut_plan_multitrack.json from classify_segments_multitrack.py:
+     - hard_cuts       : removed from every track (length-affecting, current behavior)
+     - track_mutes[S]  : silence applied only to speaker S's track BEFORE the
+                         keep-segment extraction. Length-preserving — protects
+                         the other speakers' audio in cross-talk regions.
+
+Audio quality:
+  Each output (every <speaker>_solo.mp3 + episode_merged.mp3) is encoded to MP3
+  exactly once — all loudness/trim work happens on intermediate WAVs first, so
+  the merged output is never re-encoded twice. Loudness uses two-pass (linear)
+  loudnorm to -16 LUFS (transparent gain, no dynamics compression); dynaudnorm
+  is opt-in via --dynaudnorm. Conversational pauses are trimmed on by default
+  (--trim-silence; same approach as trim_silences.py) at the WAV stage.
 
 Usage:
   python3 cut_audio_multitrack.py \
-    --track "Hogan=source/hogan-5m.mp3" \
-    --track "Ted=source/ted35-01-5m.mp3" \
-    --delete-segments output/.../2_analysis/delete_segments.json \
-    --output-dir       output/.../3_output
+    --track "Ted=source/ted-kyle-5min/ted.wav" \
+    --track "Kyle=source/ted-kyle-5min/kyle.wav" \
+    --cut-plan        output/.../2_analysis/cut_plan_multitrack.json \
+    --output-dir      output/.../3_output
 
 Notes:
-  - All tracks are expected to share the same timeline (aligned at t=0). Use
-    --offset "Speaker=seconds" to shift a track that starts late.
-  - delete_segments.json is the canonical merged-rough+fine file produced by
-    Stage 2/3. Same schema as cut_audio.py.
+  - Use --offset "Speaker=seconds" to shift a track that starts late.
+  - delete_segments.json schema unchanged from cut_audio.py.
 """
 
 import argparse
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
+import numpy as np
+import soundfile as sf
+
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
+
+# Cosine fade applied at the edges of every mute region. Short enough to be
+# inaudible, long enough to avoid clicks from a hard zero-crossing.
+MUTE_FADE_SEC = 0.008
 
 
 def calc_fade_duration(segment_duration):
@@ -67,6 +92,94 @@ def load_delete_segments(path):
             segs.append((start, end))
     segs.sort()
     return segs
+
+
+def load_cut_plan(path):
+    """
+    Load a cut_plan_multitrack.json produced by classify_segments_multitrack.py.
+
+    Returns (hard_cuts, track_mutes) where:
+      hard_cuts  : sorted list of (start, end)
+      track_mutes: { speaker: sorted list of (start, end) }
+    """
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    hard = []
+    for s in data.get("hard_cuts", []):
+        a = float(s["start"])
+        b = float(s["end"])
+        if b > a:
+            hard.append((a, b))
+    hard.sort()
+
+    mutes = {}
+    for spk, items in (data.get("track_mutes") or {}).items():
+        rs = []
+        for it in items:
+            a = float(it["start"])
+            b = float(it["end"])
+            if b > a:
+                rs.append((a, b))
+        rs.sort()
+        mutes[spk] = rs
+
+    return hard, mutes
+
+
+def apply_mutes_to_wav(wav_path, mute_ranges, fade_sec=MUTE_FADE_SEC):
+    """
+    Zero-out mute_ranges in `wav_path` IN PLACE, with cosine fades at both edges.
+
+    Reads the whole WAV with soundfile (mono or stereo). Short fades (~8ms)
+    avoid the click that a hard cut to zero produces. Length and sample
+    positions are preserved exactly — this is the per-track "silence"
+    treatment, not a cut.
+    """
+    if not mute_ranges:
+        return 0
+
+    audio, sr = sf.read(str(wav_path), dtype="float32", always_2d=False)
+    n_frames = audio.shape[0]
+    fade_n = max(int(round(fade_sec * sr)), 1)
+
+    applied = 0
+    for start_s, end_s in mute_ranges:
+        a = max(int(round(start_s * sr)), 0)
+        b = min(int(round(end_s * sr)), n_frames)
+        if b <= a:
+            continue
+
+        # If the region is shorter than one fade pair, shrink the fade.
+        region_len = b - a
+        local_fade = min(fade_n, region_len // 2) if region_len >= 2 else 0
+
+        if audio.ndim == 1:
+            seg = audio[a:b]
+        else:
+            seg = audio[a:b, :]
+
+        if local_fade > 0:
+            # Cosine ramp 1→0 at the start of the mute region, 0→1 at the end.
+            ramp_out = 0.5 * (1 + np.cos(np.linspace(0, np.pi, local_fade, dtype=np.float32)))
+            ramp_in = ramp_out[::-1]
+            if seg.ndim == 1:
+                seg[:local_fade] *= ramp_out
+                if region_len > 2 * local_fade:
+                    seg[local_fade:region_len - local_fade] = 0.0
+                seg[region_len - local_fade:] *= ramp_in
+            else:
+                seg[:local_fade, :] *= ramp_out[:, None]
+                if region_len > 2 * local_fade:
+                    seg[local_fade:region_len - local_fade, :] = 0.0
+                seg[region_len - local_fade:, :] *= ramp_in[:, None]
+        else:
+            if seg.ndim == 1:
+                seg[:] = 0.0
+            else:
+                seg[:, :] = 0.0
+        applied += 1
+
+    sf.write(str(wav_path), audio, sr, subtype="PCM_16")
+    return applied
 
 
 def probe_duration(path):
@@ -144,7 +257,9 @@ def concat_wavs(segment_files, out_wav):
     list_path = out_wav.parent / f"_concat_{out_wav.stem}.txt"
     with open(list_path, "w") as f:
         for s in segment_files:
-            f.write(f"file '{s.as_posix()}'\n")
+            # Absolute paths: the concat demuxer resolves relative `file` entries
+            # against the list file's own directory, which doubles a relative path.
+            f.write(f"file '{s.resolve().as_posix()}'\n")
     subprocess.run(
         ["ffmpeg", "-v", "quiet", "-stats",
          "-f", "concat", "-safe", "0", "-i", str(list_path),
@@ -169,57 +284,227 @@ def measure_integrated_lufs(wav_path):
     return None
 
 
-def encode_mp3_with_loudnorm(wav_in, mp3_out, bitrate_kbps=192, extra_gain_db=0.0):
-    """dynaudnorm + optional gain + loudnorm to -16 LUFS → MP3."""
-    filters = []
-    if abs(extra_gain_db) > 0.01:
-        filters.append(f"volume={extra_gain_db:.2f}dB")
-        filters.append("alimiter=limit=0.95")
-    filters.append("dynaudnorm=f=500:g=15:p=0.7")
-    filters.append("loudnorm=I=-16:TP=-1.5:LRA=11")
+# ---------------------------------------------------------------------------
+# Silence trimming (WAV stage, lossless re-cut)
+#
+# Ported from trim_silences.py so the multitrack pipeline trims real
+# conversational pauses (room tone ~ -30 dB) instead of only near-dead silence.
+# Critically, it operates on the intermediate WAV BEFORE the single MP3 encode,
+# so the merged output is no longer re-encoded twice (which muffled the audio).
+# ---------------------------------------------------------------------------
+
+def detect_silences(audio_path, threshold_sec, noise_db):
+    """ffmpeg silencedetect → list of {start, end, duration} for pauses > threshold."""
+    result = subprocess.run(
+        ["ffmpeg", "-i", str(audio_path),
+         "-af", f"silencedetect=noise={noise_db}dB:d={threshold_sec}",
+         "-f", "null", "-"],
+        capture_output=True, text=True,
+    )
+    silences = []
+    for line in result.stderr.split("\n"):
+        m = re.search(r"silence_end:\s*([\d.]+)\s*\|\s*silence_duration:\s*([\d.]+)", line)
+        if m:
+            end = float(m.group(1))
+            dur = float(m.group(2))
+            silences.append({"start": end - dur, "end": end, "duration": dur})
+    return silences
+
+
+def build_trim_keep_segments(silences, total_duration, target_sec):
+    """Keep `target_sec` of each over-threshold silence (target/2 per side), drop the rest."""
+    half = target_sec / 2.0
+    trims = []
+    for s in silences:
+        ts = s["start"] + half
+        te = s["end"] - half
+        if te > ts + 0.01:
+            trims.append((ts, te))
+    trims.sort()
+    keeps = []
+    cursor = 0.0
+    for ts, te in trims:
+        if cursor < ts:
+            keeps.append((cursor, ts))
+        cursor = te
+    if cursor < total_duration:
+        keeps.append((cursor, total_duration))
+    return keeps
+
+
+def compute_word_gap_cuts(words_path, total_duration, threshold_sec=0.6, target_sec=0.4):
+    """
+    Find dead-air cuts from word-level timing across ALL speakers.
+
+    A stretch where NO speaker has a word for longer than `threshold_sec` is
+    genuine dead air — safe to remove from every track (keeps them aligned).
+    Each such gap is trimmed down to `target_sec` (target/2 retained on each
+    side as breathing room, which also buffers against Whisper's word-timing
+    slop so speech tails aren't clipped).
+
+    Returns a list of (start, end) cuts in the ORIGINAL timeline — caller folds
+    these into the hard-cut delete list so the normal keep-segment extraction
+    removes them identically from each track.
+    """
+    words = json.loads(Path(words_path).read_text(encoding="utf-8"))
+    spoken = sorted(
+        (float(w["start"]), float(w["end"]))
+        for w in words
+        if not w.get("isSpeakerLabel") and not w.get("isGap")
+        and float(w.get("end", 0)) > float(w.get("start", 0))
+    )
+
+    half = target_sec / 2.0
+    cuts = []
+    prev_end = 0.0
+    for start, end in spoken:
+        if start - prev_end > threshold_sec:
+            a = prev_end + half
+            b = start - half
+            if b > a:
+                cuts.append((a, b))
+        prev_end = max(prev_end, end)
+    # Trailing dead air after the last word.
+    if total_duration - prev_end > threshold_sec:
+        a = prev_end + half
+        if total_duration > a:
+            cuts.append((a, total_duration))
+    return cuts
+
+
+def compute_dead_air_keeps(merged_wav, threshold_sec=0.8, target_sec=0.6, noise_db=-30.0):
+    """
+    Detect dead air on the MERGED track and return the keep-segments to retain.
+
+    Silence on the merged mix means *every* speaker is quiet — genuine dead air.
+    The returned keeps are applied identically to every track (each solo + the
+    merged) so all outputs stay sample-aligned and a solo is never collapsed into
+    a monologue (which independent per-track detection would do, since one
+    speaker's track looks "silent" whenever the other is talking).
+
+    Returns (keeps, total_duration, n_pauses). keeps is None when nothing to trim.
+    """
+    silences = detect_silences(merged_wav, threshold_sec, noise_db)
+    total = probe_duration(merged_wav)
+    if not silences:
+        return None, total, 0
+    keeps = build_trim_keep_segments(silences, total, target_sec)
+    if not keeps:
+        return None, total, len(silences)
+    return keeps, total, len(silences)
+
+
+def apply_keeps_to_wav(wav_path, keeps):
+    """Re-cut a WAV to `keeps` (lossless PCM, atrim+concat) IN PLACE. Returns new duration."""
+    parts = [
+        f"[0:a]atrim=start={s:.4f}:end={e:.4f},asetpts=N/SR/TB[p{i}]"
+        for i, (s, e) in enumerate(keeps)
+    ]
+    parts.append("".join(f"[p{i}]" for i in range(len(keeps)))
+                 + f"concat=n={len(keeps)}:v=0:a=1[out]")
+    script_path = wav_path.parent / f"_trim_{wav_path.stem}.txt"
+    script_path.write_text(";\n".join(parts), encoding="utf-8")
+
+    tmp_path = wav_path.with_name(wav_path.stem + ".trim.wav")
+    subprocess.run(
+        ["ffmpeg", "-v", "quiet", "-stats",
+         "-i", str(wav_path),
+         "-filter_complex_script", str(script_path),
+         "-map", "[out]",
+         "-c:a", "pcm_s16le", "-ar", "48000",
+         "-y", str(tmp_path)],
+        check=True,
+    )
+    script_path.unlink(missing_ok=True)
+    after = probe_duration(tmp_path)
+    tmp_path.replace(wav_path)
+    return after
+
+
+# ---------------------------------------------------------------------------
+# Loudness (two-pass loudnorm — transparent gain, no dynamics compression)
+# ---------------------------------------------------------------------------
+
+def measure_loudnorm(wav_in, I=-16.0, TP=-1.5, LRA=11.0):
+    """Pass 1: measure integrated loudness/TP/LRA/threshold. Returns dict or None."""
+    result = subprocess.run(
+        ["ffmpeg", "-i", str(wav_in),
+         "-af", f"loudnorm=I={I}:TP={TP}:LRA={LRA}:print_format=json",
+         "-f", "null", "-"],
+        capture_output=True, text=True,
+    )
+    for block in reversed(re.findall(r"\{[^{}]*\}", result.stderr, re.S)):
+        if '"input_i"' in block:
+            try:
+                return json.loads(block)
+            except json.JSONDecodeError:
+                return None
+    return None
+
+
+def loudnorm_wav(wav_in, wav_out, dynaudnorm=False, I=-16.0, TP=-1.5, LRA=11.0):
+    """
+    Normalize to -16 LUFS → WAV using two-pass (linear) loudnorm.
+
+    Two-pass linear normalization is a transparent gain + true-peak limit — it
+    does NOT compress dynamics, so it avoids the "over-pressed / pumping" sound
+    of single-pass dynamic loudnorm. dynaudnorm (intra-track leveling) is opt-in
+    via `dynaudnorm=True` for tracks with bad mic-distance swings.
+    """
+    stats = measure_loudnorm(wav_in, I, TP, LRA)
+    measured_ok = False
+    if stats:
+        try:
+            measured_ok = float(stats["input_i"]) > -70.0
+        except (KeyError, ValueError):
+            measured_ok = False
+
+    chain = ["dynaudnorm=f=500:g=15:p=0.7"] if dynaudnorm else []
+    if measured_ok:
+        chain.append(
+            f"loudnorm=I={I}:TP={TP}:LRA={LRA}"
+            f":measured_I={stats['input_i']}:measured_TP={stats['input_tp']}"
+            f":measured_LRA={stats['input_lra']}:measured_thresh={stats['input_thresh']}"
+            f":offset={stats['target_offset']}:linear=true"
+        )
+    else:
+        # Fallback: silent/degenerate track — single-pass loudnorm.
+        chain.append(f"loudnorm=I={I}:TP={TP}:LRA={LRA}")
+
     subprocess.run(
         ["ffmpeg", "-v", "quiet", "-stats",
          "-i", str(wav_in),
-         "-af", ",".join(filters),
+         "-af", ",".join(chain),
+         "-c:a", "pcm_s16le", "-ar", "48000",
+         "-y", str(wav_out)],
+        check=True,
+    )
+
+
+def encode_wav_to_mp3(wav_in, mp3_out, bitrate_kbps=192):
+    """Single, final MP3 encode (no further filtering — keeps it lossless until here)."""
+    subprocess.run(
+        ["ffmpeg", "-v", "quiet", "-stats",
+         "-i", str(wav_in),
          "-c:a", "libmp3lame", "-b:a", f"{bitrate_kbps}k",
          "-y", str(mp3_out)],
         check=True,
     )
 
 
-def loudnorm_to_wav(wav_in, wav_out):
-    """dynaudnorm + loudnorm to -16 LUFS → WAV (so we can feed it to amix)."""
-    subprocess.run(
-        ["ffmpeg", "-v", "quiet", "-stats",
-         "-i", str(wav_in),
-         "-af", "dynaudnorm=f=500:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11",
-         "-c:a", "pcm_s16le",
-         "-y", str(wav_out)],
-        check=True,
-    )
-
-
-def mix_tracks(track_wavs_with_gain, merged_out_mp3, bitrate_kbps=192,
-               post_dynaudnorm=True):
+def mix_to_wav(track_wavs_with_gain, mixed_out_wav):
     """
-    Mix multiple WAVs with per-track volume gain, then loudnorm to -16 LUFS.
+    Mix multiple WAVs with per-track volume gain → raw summed WAV (no loudnorm).
 
-    track_wavs_with_gain: list of (wav_path, gain_db).
-    Uses amix normalize=0 so we control the levels ourselves (avoids amix's
-    default /N attenuation).
-
-    post_dynaudnorm: when True (default, used by lift/none), runs dynaudnorm AFTER
-      mixing for extra dynamics control. When False (used by equalize), skips the
-      second dynaudnorm because each input track was already dynaudnorm'd during
-      loudnorm_to_wav() — running it twice makes merged sound flatter than solo
-      and breaks "solo MP3 ≈ that speaker as heard in merged" consistency.
+    track_wavs_with_gain: list of (wav_path, gain_db). amix normalize=0 so we
+    control levels ourselves (avoids amix's default /N attenuation). The final
+    loudnorm runs separately on the result via loudnorm_wav().
     """
     inputs = []
     filter_parts = []
     labels = []
     for idx, (wav, gain_db) in enumerate(track_wavs_with_gain):
         inputs += ["-i", str(wav)]
-        # Apply gain (can be 0) and feed into amix
         if abs(gain_db) > 0.01:
             filter_parts.append(
                 f"[{idx}:a]volume={gain_db:.2f}dB,alimiter=limit=0.95[a{idx}]"
@@ -229,23 +514,17 @@ def mix_tracks(track_wavs_with_gain, merged_out_mp3, bitrate_kbps=192,
         labels.append(f"[a{idx}]")
 
     n = len(track_wavs_with_gain)
-    post_chain = (
-        "dynaudnorm=f=500:g=15:p=0.7,loudnorm=I=-16:TP=-1.5:LRA=11"
-        if post_dynaudnorm else
-        "loudnorm=I=-16:TP=-1.5:LRA=11"
-    )
-    amix = (
-        f"{''.join(labels)}amix=inputs={n}:normalize=0:duration=longest[mix];"
-        f"[mix]{post_chain}[out]"
-    )
+    amix = f"{''.join(labels)}amix=inputs={n}:normalize=0:duration=longest[out]"
     filter_complex = ";".join(filter_parts) + ";" + amix
 
-    cmd = ["ffmpeg", "-v", "quiet", "-stats", *inputs,
-           "-filter_complex", filter_complex,
-           "-map", "[out]",
-           "-c:a", "libmp3lame", "-b:a", f"{bitrate_kbps}k",
-           "-y", str(merged_out_mp3)]
-    subprocess.run(cmd, check=True)
+    subprocess.run(
+        ["ffmpeg", "-v", "quiet", "-stats", *inputs,
+         "-filter_complex", filter_complex,
+         "-map", "[out]",
+         "-c:a", "pcm_s16le", "-ar", "48000",
+         "-y", str(mixed_out_wav)],
+        check=True,
+    )
 
 
 def main():
@@ -254,8 +533,44 @@ def main():
                    help='Repeatable. Format: "Speaker=/path/to/audio.{mp3,wav,m4a}"')
     p.add_argument("--offset", action="append", default=[],
                    help='Optional timestamp offset (sec) per speaker, e.g. "Bob=0.25"')
-    p.add_argument("--delete-segments", required=True,
-                   help="Path to delete_segments.json (rough+fine merged).")
+    p.add_argument("--delete-segments", default=None,
+                   help="Path to delete_segments.json (rough+fine merged). Required unless --cut-plan is provided.")
+    p.add_argument("--cut-plan", default=None,
+                   help=(
+                       "Path to cut_plan_multitrack.json from classify_segments_multitrack.py.\n"
+                       "When given, supersedes --delete-segments: hard_cuts apply globally,\n"
+                       "and track_mutes silence each speaker's own track only (length-preserving).\n"
+                       "This is how cross-talk safe NSV / overlap removal works."
+                   ))
+    p.add_argument("--trim-silence", action=argparse.BooleanOptionalAction, default=True,
+                   help=(
+                       "Trim conversational dead air from every output (each solo + merged),\n"
+                       "keeping them sample-aligned. ON by default; use --no-trim-silence to skip.\n"
+                       "Two detectors:\n"
+                       "  --word-gaps  (preferred): dead air = stretch where NO speaker has a word.\n"
+                       "               Uses word timing, immune to the other mic's room-tone/bleed.\n"
+                       "  audio (fallback when --word-gaps is omitted): silencedetect on the merged\n"
+                       "               track (same approach as trim_silences.py)."
+                   ))
+    p.add_argument("--word-gaps", default=None,
+                   help=(
+                       "Path to subtitles_words.json. When given, dead air is detected from\n"
+                       "word timing across all speakers (preferred) and folded into the hard\n"
+                       "cuts; the audio merged-trim is skipped."
+                   ))
+    p.add_argument("--trim-threshold", type=float, default=0.6,
+                   help="Gaps longer than this many seconds get trimmed (default 0.6).")
+    p.add_argument("--trim-target", type=float, default=0.4,
+                   help="Each trimmed gap is reduced to this many seconds (default 0.4).")
+    p.add_argument("--trim-noise", type=float, default=-30.0,
+                   help="silencedetect noise floor in dB (audio fallback detector only; default -30).")
+    p.add_argument("--dynaudnorm", action="store_true",
+                   help=(
+                       "Opt back into dynaudnorm (intra-track dynamics leveling) on top of the\n"
+                       "two-pass loudnorm. OFF by default — two-pass loudnorm is transparent and\n"
+                       "dynaudnorm is what made isolated tracks sound over-compressed. Enable only\n"
+                       "for a track with bad mic-distance swings."
+                   ))
     p.add_argument("--output-dir", required=True,
                    help="Directory for solo + merged outputs.")
     p.add_argument("--bitrate", type=int, default=192,
@@ -283,9 +598,49 @@ def main():
     work_dir = output_dir / "_multitrack_work"
     work_dir.mkdir(exist_ok=True)
 
-    delete_segs = load_delete_segments(args.delete_segments)
-    print(f"📄 Loaded {len(delete_segs)} delete segments from {args.delete_segments}")
+    if not args.cut_plan and not args.delete_segments:
+        p.error("either --cut-plan or --delete-segments must be provided")
+
+    track_mutes = {}
+    if args.cut_plan:
+        hard_cut_pairs, track_mutes = load_cut_plan(args.cut_plan)
+        delete_segs = hard_cut_pairs  # hard_cuts drive the global keep-segment inversion
+        print(f"📄 Loaded cut plan from {args.cut_plan}")
+        print(f"   hard_cuts: {len(delete_segs)}")
+        for spk, mutes in track_mutes.items():
+            print(f"   mutes[{spk}]: {len(mutes)}")
+        unknown = set(track_mutes) - set(tracks)
+        if unknown:
+            print(f"⚠️  Cut plan has mutes for unknown speakers {sorted(unknown)}; they will be ignored.")
+    else:
+        delete_segs = load_delete_segments(args.delete_segments)
+        print(f"📄 Loaded {len(delete_segs)} delete segments from {args.delete_segments}")
     print(f"🎙️  Tracks: {list(tracks.keys())}")
+
+    def _union_len(segs):
+        merged = []
+        for a, b in sorted(segs):
+            if merged and a <= merged[-1][1]:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+            else:
+                merged.append((a, b))
+        return sum(b - a for a, b in merged)
+
+    # Dead-air trimming. Preferred path: word-gap detection folded into the hard
+    # cuts (removed from every track by the normal keep-segment extraction →
+    # outputs stay aligned). Falls back to the audio merged-trim in Phase 4 when
+    # --word-gaps isn't supplied.
+    use_audio_trim = args.trim_silence and not args.word_gaps
+    if args.trim_silence and args.word_gaps:
+        total_ref = max(probe_duration(Path(p)) for p in tracks.values())
+        wg_cuts = compute_word_gap_cuts(
+            args.word_gaps, total_ref, args.trim_threshold, args.trim_target)
+        before = _union_len(delete_segs)
+        delete_segs = sorted(delete_segs + wg_cuts)
+        after = _union_len(delete_segs)
+        print(f"🧹 Word-gap dead-air trim: {len(wg_cuts)} gaps "
+              f"(> {args.trim_threshold}s → keep {args.trim_target}s), "
+              f"net +{after - before:.0f}s removed across all tracks.")
     print("")
 
     per_track_cut_wavs = {}  # speaker -> Path (cut, no loudnorm yet)
@@ -304,6 +659,19 @@ def main():
         cut_wav = work_dir / f"{speaker}_cut.wav"
         decode_to_wav(audio_path, raw_wav)
 
+        # Apply per-track mutes from the cut plan, BEFORE keep-segment extraction.
+        # Mutes are length-preserving silence treatments (cross-talk safe);
+        # the keep-segments below then perform any length-affecting hard cuts.
+        spk_mutes = track_mutes.get(speaker, [])
+        if spk_mutes:
+            shifted_mutes = [
+                (max(s - offset, 0.0), max(e - offset, 0.0))
+                for s, e in spk_mutes if e > offset
+            ]
+            shifted_mutes = [(s, e) for s, e in shifted_mutes if e > s]
+            n_applied = apply_mutes_to_wav(raw_wav, shifted_mutes)
+            print(f"   Muted {n_applied} regions on {speaker}'s track (fade {MUTE_FADE_SEC*1000:.0f} ms)")
+
         seg_files = extract_keep_segments(raw_wav, keep_segs, work_dir, speaker)
         concat_wavs(seg_files, cut_wav)
         for sf in seg_files:
@@ -316,41 +684,28 @@ def main():
         print(f"   Integrated loudness: {lufs} LUFS")
         print("")
 
-    # --- Phase 2: per-track loudnorm (WAV) → solo MP3 ---
-    print(f"🎚️  Balance mode: {args.balance}")
+    # --- Phase 2: per-track two-pass loudnorm (WAV, transparent) ---
+    # Every track gets loudnormed to -16 LUFS. The solo MP3 is built from this,
+    # and equalize-mode merge reuses these same WAVs.
+    print(f"🎚️  Balance mode: {args.balance}  |  dynaudnorm: {'on' if args.dynaudnorm else 'off'}")
+    dyn = "dynaudnorm + " if args.dynaudnorm else ""
+    print(f"   Loudnorming each track to -16 LUFS ({dyn}two-pass, WAV)...")
     per_track_loudnormed_wavs = {}
-    if args.balance == "equalize":
-        print("   Loudnorming each track to -16 LUFS (WAV) before mix...")
-        for speaker, cut_wav in per_track_cut_wavs.items():
-            ln_wav = work_dir / f"{speaker}_loudnormed.wav"
-            loudnorm_to_wav(cut_wav, ln_wav)
-            per_track_loudnormed_wavs[speaker] = ln_wav
-            print(f"   ✅ {speaker} → {ln_wav.name}")
-    print("")
-
-    print("🎚️  Encoding per-speaker solo MP3s (loudnorm -16 LUFS each)...")
     for speaker, cut_wav in per_track_cut_wavs.items():
-        solo_path = output_dir / f"{speaker}_solo.mp3"
-        if args.balance == "equalize":
-            # Re-encode the already-loudnormed WAV (avoids double-loudnorm).
-            subprocess.run(
-                ["ffmpeg", "-v", "quiet", "-stats",
-                 "-i", str(per_track_loudnormed_wavs[speaker]),
-                 "-c:a", "libmp3lame", "-b:a", f"{args.bitrate}k",
-                 "-y", str(solo_path)],
-                check=True,
-            )
-        else:
-            encode_mp3_with_loudnorm(cut_wav, solo_path, bitrate_kbps=args.bitrate)
-        print(f"   ✅ {solo_path}")
+        ln_wav = work_dir / f"{speaker}_loudnormed.wav"
+        loudnorm_wav(cut_wav, ln_wav, dynaudnorm=args.dynaudnorm)
+        per_track_loudnormed_wavs[speaker] = ln_wav
+        print(f"   ✅ {speaker} → {ln_wav.name}")
     print("")
 
-    # --- Phase 3: merged ---
+    # --- Phase 3: build the merged mix (WAV) ---
+    # Built first so dead-air can be detected on the merged track (silence there
+    # = every speaker quiet) and the same trim applied to every output.
     merged_path = output_dir / "episode_merged.mp3"
 
     if args.balance == "equalize":
         print("🎛️  Mixing pre-equalized tracks (every speaker at -16 LUFS)...")
-        # All tracks already at -16 LUFS → mix with normalize=0, then mild final
+        # All tracks already at -16 LUFS → mix with normalize=0, then final
         # loudnorm to clean up the post-sum level (2 tracks at -16 LUFS sum to ~-13 LUFS).
         track_inputs = [(per_track_loudnormed_wavs[s], 0.0) for s in per_track_cut_wavs]
     elif args.balance == "lift":
@@ -377,13 +732,50 @@ def main():
         print("🎛️  No inter-track balance; mixing raw cut WAVs.")
         track_inputs = [(per_track_cut_wavs[s], 0.0) for s in per_track_cut_wavs]
 
-    # In equalize mode, each track was already dynaudnorm'd during loudnorm_to_wav.
-    # Skipping the post-mix dynaudnorm keeps "solo MP3 ≈ that speaker in merged".
-    skip_post_dyn = (args.balance == "equalize")
-    chain_desc = "loudnorm only" if skip_post_dyn else "dynaudnorm + loudnorm"
-    print(f"🎚️  Mixing → {merged_path.name} (amix normalize=0 + final {chain_desc} -16 LUFS)...")
-    mix_tracks(track_inputs, merged_path, bitrate_kbps=args.bitrate,
-               post_dynaudnorm=not skip_post_dyn)
+    mixed_raw = work_dir / "merged_raw.wav"
+    merged_norm = work_dir / "merged_norm.wav"
+    print(f"🎚️  Mixing → merged WAV (amix normalize=0 + two-pass loudnorm -16 LUFS)...")
+    mix_to_wav(track_inputs, mixed_raw)
+    loudnorm_wav(mixed_raw, merged_norm, dynaudnorm=args.dynaudnorm)
+    mixed_raw.unlink(missing_ok=True)
+    print("")
+
+    # --- Phase 4: audio-fallback dead-air trim (only when --word-gaps absent) ---
+    # Word-gap trimming already happened in Phase 1 (folded into hard cuts). This
+    # audio detector is the fallback path; one trim plan from the merged keeps
+    # every output sample-aligned and never collapses a solo into a monologue.
+    keeps = None
+    if use_audio_trim:
+        print(f"🧹 Detecting dead air on merged (pauses > {args.trim_threshold}s @ {args.trim_noise:.0f} dB)...")
+        keeps, total, n_pauses = compute_dead_air_keeps(
+            merged_norm, args.trim_threshold, args.trim_target, args.trim_noise)
+        if keeps:
+            kept = sum(e - s for s, e in keeps)
+            print(f"   {n_pauses} dead-air pauses → trim {total:.1f}s → {kept:.1f}s "
+                  f"(−{total - kept:.0f}s), applied to every output.")
+        else:
+            print(f"   No dead air > {args.trim_threshold}s on the merged track; nothing to trim.")
+        print("")
+
+    # Solo MP3s: copy loudnormed WAV, apply shared keeps, single MP3 encode.
+    print("🎚️  Encoding per-speaker solo MP3s (single MP3 encode each)...")
+    for speaker in per_track_cut_wavs:
+        solo_path = output_dir / f"{speaker}_solo.mp3"
+        solo_wav = work_dir / f"{speaker}_solo.wav"
+        shutil.copyfile(per_track_loudnormed_wavs[speaker], solo_wav)
+        if keeps:
+            apply_keeps_to_wav(solo_wav, keeps)
+        encode_wav_to_mp3(solo_wav, solo_path, bitrate_kbps=args.bitrate)
+        solo_wav.unlink(missing_ok=True)
+        print(f"   ✅ {solo_path}")
+    print("")
+
+    # Merged MP3: apply the same keeps, single MP3 encode.
+    print(f"🎚️  Encoding {merged_path.name}...")
+    if keeps:
+        apply_keeps_to_wav(merged_norm, keeps)
+    encode_wav_to_mp3(merged_norm, merged_path, bitrate_kbps=args.bitrate)
+    merged_norm.unlink(missing_ok=True)
     print(f"   ✅ {merged_path}")
     print("")
 

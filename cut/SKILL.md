@@ -1058,21 +1058,30 @@ python3 "$SKILL_DIR/cut/scripts/cut_audio_multitrack.py" \
 ```
 
 **Output:**
-- `3_output/<Speaker>_solo.mp3` — per-track cut + dynaudnorm + loudnorm to -16 LUFS.
-- `3_output/episode_merged.mp3` — see `--balance` for the mix strategy. Always ends in a final loudnorm to -16 LUFS.
+- `3_output/<Speaker>_solo.mp3` — per-track cut + two-pass loudnorm to -16 LUFS.
+- `3_output/episode_merged.mp3` — see `--balance` for the mix strategy. Always ends in a final two-pass loudnorm to -16 LUFS.
+
+All three outputs are **encoded to MP3 exactly once** (loudness + silence-trim happen on intermediate WAVs first), so the merged is never re-encoded twice. Loudness uses **two-pass (linear) loudnorm** — transparent gain, no dynamics compression — which avoids the over-pressed/muffled sound of single-pass dynamic loudnorm + dynaudnorm.
+
+**Built-in silence trim (replaces a separate Stage 5.2 for multitrack):** dead air is detected on the **merged** track (silence there = *every* speaker quiet) and the same trim is applied to all three outputs, so they stay sample-aligned and a solo is never collapsed into a monologue. ON by default.
 
 **Flags:**
 - `--balance equalize|lift|none` — inter-speaker volume strategy for the merged mix. **Default: `equalize`.**
-  - `equalize` (default) — each track is dynaudnorm + loudnorm'd to -16 LUFS individually, then mixed; the post-mix stage runs **only** loudnorm (no second dynaudnorm). This makes each `<Speaker>_solo.mp3` audibly identical to that speaker's voice as heard in `episode_merged.mp3` — important when the user ships solo + merged together (e.g. video subtitle track + audio podcast). Strongest inter-speaker level consistency. Trade-off: the louder speaker's dynamics get a bit compressed.
-  - `lift` — measure each track's LUFS, raise the quieter ones up to the loudest track's level (+12 dB cap), then mix; post-mix runs dynaudnorm + loudnorm. Preserves the loudest speaker's natural dynamics.
-  - `none` — just mix the raw cut WAVs + post-mix dynaudnorm + loudnorm. Big level differences stay big.
+  - `equalize` (default) — each track is two-pass-loudnorm'd to -16 LUFS individually, then mixed and given a final loudnorm. Makes each `<Speaker>_solo.mp3` audibly match that speaker's voice in `episode_merged.mp3` — important when shipping solo + merged together (e.g. video subtitle track + audio podcast). Strongest inter-speaker level consistency.
+  - `lift` — measure each track's LUFS, raise the quieter ones up to the loudest track's level (+12 dB cap), then mix + final loudnorm. Preserves the loudest speaker's natural dynamics.
+  - `none` — just mix the raw cut WAVs + final loudnorm. Big level differences stay big.
+- `--trim-silence` / `--no-trim-silence` — trim dead air on every output (default **on**).
+- `--trim-threshold 0.8` — pauses longer than this (sec) get trimmed.
+- `--trim-target 0.6` — each trimmed pause is reduced to this (sec).
+- `--trim-noise -30` — silencedetect noise floor (dB) for dead-air detection.
+- `--dynaudnorm` — opt back into dynaudnorm (intra-track dynamics leveling) on top of loudnorm. **Off by default** (it's what made isolated tracks sound over-compressed). Enable only for a track with bad mic-distance swings.
 - `--offset "Speaker=0.25"` — repeatable. Shift a track that starts late.
 - `--bitrate 192` — MP3 bitrate kbps (default 192).
 - `--keep-intermediates` — leave per-track cut/loudnormed WAVs for debugging.
 
 **Notes:**
 - `--speakers-json` is **not** needed here — each input file already corresponds to one speaker.
-- Stage 5.2 (silence trim) still applies, run it against each output you intend to ship.
+- Don't run `trim_silences.py` separately on multitrack outputs — that re-encodes the MP3 (generation loss) and would trim each solo independently into a monologue. Trimming is built in.
 
 > Pass `--speakers-json` always. The script auto-detects volume difference and skips compensation when < 0.5 dB; no side effect.
 > **`--no-fade` is mandatory**: the default adaptive fade (max 0.3 s) eats short syllables. `--no-fade` uses a 3 ms micro-fade instead — defeats clicks without affecting speech.
