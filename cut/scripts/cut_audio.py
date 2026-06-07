@@ -28,6 +28,61 @@ sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
 
+# ── Tier 1: equal-power crossfade at every seam ──
+# Default 60 ms overlap with constant-power sqrt curves. This sounds
+# materially better than two back-to-back fades (which produce an audible
+# energy dip at the seam). Combined with Tier 2's inner-snap on cut points,
+# the result approaches manual editor's "invisible cut" feel.
+CROSSFADE_DEFAULT_S = 0.06
+
+
+def concat_with_crossfade(segment_files, output_file, crossfade_s):
+    """Equal-power crossfade concat using soundfile + numpy.
+
+    Maintains constant power across the seam by ramping with sqrt curves.
+    Memory: holds the whole audio in RAM (~600 MB for 1h 16k mono); fine for
+    podcast lengths but would need streaming for hour-plus episodes.
+    """
+    import soundfile as sf
+    import numpy as np
+
+    if not segment_files:
+        raise ValueError('no segments to concat')
+
+    first, sr = sf.read(segment_files[0], always_2d=False)
+    out = first.astype(np.float32, copy=False)
+    if len(segment_files) == 1:
+        sf.write(output_file, out, sr)
+        return
+
+    overlap_n = max(1, int(crossfade_s * sr))
+
+    for f in segment_files[1:]:
+        nxt, _sr = sf.read(f, always_2d=False)
+        nxt = nxt.astype(np.float32, copy=False)
+        n = min(overlap_n, len(out), len(nxt))
+        if n < 16:
+            # too short to crossfade — just concat
+            out = np.concatenate([out, nxt])
+            continue
+        # Equal-power (constant-power) crossfade
+        ramp = np.linspace(0.0, 1.0, n, dtype=np.float32)
+        fade_in = np.sqrt(ramp)
+        fade_out = np.sqrt(1.0 - ramp)
+        if out.ndim == 1:
+            tail = out[-n:] * fade_out
+            head = nxt[:n] * fade_in
+            mixed = tail + head
+            out = np.concatenate([out[:-n], mixed, nxt[n:]])
+        else:
+            tail = out[-n:] * fade_out[:, None]
+            head = nxt[:n] * fade_in[:, None]
+            mixed = tail + head
+            out = np.concatenate([out[:-n], mixed, nxt[n:]])
+
+    sf.write(output_file, out, sr)
+
+
 def calc_fade_duration(segment_duration):
     """
     Adaptive fade duration tied to segment length.
@@ -192,10 +247,11 @@ def get_segment_speaker(seg_start, seg_end, speaker_segments):
 
 
 def main():
-    # Argument parsing: positional + --speakers-json / --no-fade options
+    # Argument parsing: positional + --speakers-json / --no-fade / --crossfade-s options
     positional_args = []
     speakers_json = None
     no_fade = False
+    crossfade_s = CROSSFADE_DEFAULT_S   # default on — Tier-1 equal-power crossfade
 
     i = 1
     while i < len(sys.argv):
@@ -208,6 +264,16 @@ def main():
                 sys.exit(1)
         elif sys.argv[i] == '--no-fade':
             no_fade = True
+            i += 1
+        elif sys.argv[i] == '--crossfade-s':
+            if i + 1 < len(sys.argv):
+                crossfade_s = float(sys.argv[i + 1])
+                i += 2
+            else:
+                print("--crossfade-s requires a float (seconds, e.g. 0.06)")
+                sys.exit(1)
+        elif sys.argv[i] == '--no-crossfade':
+            crossfade_s = 0.0
             i += 1
         else:
             positional_args.append(sys.argv[i])
@@ -303,11 +369,21 @@ def main():
 
     # Extract keep segments from the WAV
     has_vol = speaker_compensation and any(g > 0 for g in speaker_compensation.values())
-    if no_fade:
+    use_crossfade = crossfade_s > 0 and not no_fade
+    if use_crossfade:
+        # Crossfade mode handles seams via numpy concat; per-segment fades would
+        # double-dip the seam energy. Disable per-segment fades.
+        no_fade_for_seg = True
+        print(f"🎬 Extracting keep segments (equal-power crossfade {crossfade_s*1000:.0f} ms"
+              f"{', plus speaker volume alignment' if has_vol else ''})...")
+    elif no_fade:
+        no_fade_for_seg = True
         print(f"🎬 Extracting keep segments (no fades{', plus speaker volume alignment' if has_vol else ''})...")
     elif has_vol:
+        no_fade_for_seg = False
         print("🎬 Extracting keep segments (adaptive fades + speaker volume alignment)...")
     else:
+        no_fade_for_seg = False
         print("🎬 Extracting keep segments (adaptive fades)...")
     segment_files = []
     fade_count = 0
@@ -319,10 +395,11 @@ def main():
         is_first = (i == 0)
         is_last = (i == len(keep_segs) - 1)
 
-        if no_fade:
-            # Tiny 3 ms fade prevents PCM-discontinuity clicks but does not eat audio
-            fade_in_dur = 0.0 if is_first else 0.003
-            fade_out_dur = 0.0 if is_last else 0.003
+        if no_fade_for_seg:
+            # When using crossfade or --no-fade, skip per-segment fades entirely.
+            # The crossfade handles seams; clicks are avoided by the overlap.
+            fade_in_dur = 0.0
+            fade_out_dur = 0.0
         else:
             fade_in_dur = 0.0 if is_first else calc_fade_duration(seg_dur)
             fade_out_dur = 0.0 if is_last else calc_fade_duration(seg_dur)
@@ -386,23 +463,27 @@ def main():
     print(f"✅ Extracted all {len(keep_segs)} segments; {fade_count} cut points received fades")
     print("")
 
-    # Concatenate WAV segments
-    print("🔗 Concatenating segments...")
-    concat_file = 'concat_list.txt'
-    with open(concat_file, 'w') as f:
-        for seg_file in segment_files:
-            f.write(f"file '{seg_file}'\n")
-
+    # Concatenate segments — equal-power crossfade via numpy when enabled.
     temp_concat = '_concat_temp.wav'
-    cmd = [
-        'ffmpeg', '-v', 'quiet', '-stats',
-        '-f', 'concat',
-        '-safe', '0',
-        '-i', concat_file,
-        '-c', 'copy',
-        '-y', temp_concat
-    ]
-    subprocess.run(cmd, check=True)
+    concat_file = None
+    if use_crossfade:
+        print(f"🔗 Crossfading + concatenating ({crossfade_s*1000:.0f} ms equal-power)...")
+        concat_with_crossfade(segment_files, temp_concat, crossfade_s)
+    else:
+        print("🔗 Concatenating segments (no crossfade)...")
+        concat_file = 'concat_list.txt'
+        with open(concat_file, 'w') as f:
+            for seg_file in segment_files:
+                f.write(f"file '{seg_file}'\n")
+        cmd = [
+            'ffmpeg', '-v', 'quiet', '-stats',
+            '-f', 'concat',
+            '-safe', '0',
+            '-i', concat_file,
+            '-c', 'copy',
+            '-y', temp_concat
+        ]
+        subprocess.run(cmd, check=True)
 
     # Probe source encoding to match output quality
     probe_result = subprocess.run(
@@ -450,7 +531,8 @@ def main():
     os.remove(temp_concat)
     for seg_file in segment_files:
         os.remove(seg_file)
-    os.remove(concat_file)
+    if concat_file is not None and os.path.exists(concat_file):
+        os.remove(concat_file)
 
     print("")
     print(f"✅ Cut complete: {output_name}")

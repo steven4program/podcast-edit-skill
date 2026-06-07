@@ -1030,24 +1030,6 @@ __SPEAKER_STYLES__
   .s-check { display: none; }
 }
 
-.nsv-section { margin: 24px 0; padding: 16px; background: #1a1f28; border-radius: 8px; color: #e0e0e0; }
-.nsv-section h2 { font-size: 16px; margin: 0 0 8px; color: #fff; }
-.nsv-help { color: #9aa3ad; font-size: 13px; margin: 0 0 12px; }
-.nsv-empty { color: #9aa3ad; font-style: italic; }
-.nsv-card { border: 1px solid #2f3742; padding: 10px 12px; margin: 8px 0; border-radius: 6px; }
-.nsv-card.nsv-confirmed { background: rgba(111, 207, 151, 0.1); border-color: #6fcf97; }
-.nsv-card.nsv-kept { background: rgba(235, 87, 87, 0.08); border-color: #eb5757; }
-.nsv-card.nsv-auto-confirmed { background: rgba(86, 156, 214, 0.08); border-color: #569cd6; }
-.nsv-auto-tag { color: #569cd6; font-size: 12px; font-weight: 600; }
-.nsv-head { display: flex; gap: 12px; align-items: center; font-size: 13px; }
-.nsv-time { font-family: ui-monospace, monospace; }
-.nsv-type.type-throat_clear { color: #eb5757; font-weight: 600; }
-.nsv-type.type-nose_clear { color: #f2c94c; font-weight: 600; }
-.nsv-warning { color: #f2c94c; font-size: 12px; }
-.nsv-desc { color: #cdd5dc; font-size: 13px; margin: 6px 0; }
-.nsv-actions button { margin-right: 6px; padding: 4px 10px; }
-.btn-confirm { border-color: #6fcf97; }
-.btn-keep { border-color: #eb5757; }
 </style>
 </head>
 <body>
@@ -1143,6 +1125,32 @@ __SPEAKER_STYLES__
   </div>
 </div>
 
+<!-- View Tabs -->
+<style>
+.view-tab{background:var(--gray-100,#f1f1f1);border:1px solid var(--gray-300,#ccc);border-radius:6px;padding:6px 14px;font-size:13px;cursor:pointer;color:#444;}
+.view-tab.active{background:#2563eb;color:#fff;border-color:#2563eb;font-weight:600;}
+.filler-head{font-size:13px;color:#555;margin-bottom:10px;}
+.filler-chips{margin-bottom:12px;}
+.filler-chip{display:inline-block;background:#f1f1f1;border:1px solid #ddd;border-radius:12px;padding:3px 10px;font-size:12px;cursor:pointer;margin:2px;}
+.filler-chip.active{background:#333;color:#fff;border-color:#333;}
+.filler-row{padding:8px 10px;border-bottom:1px solid #eee;}
+.filler-main{display:flex;gap:10px;align-items:baseline;flex-wrap:wrap;}
+.filler-time{color:#2563eb;cursor:pointer;font-variant-numeric:tabular-nums;font-size:13px;min-width:64px;}
+.filler-time:hover{text-decoration:underline;}
+.filler-badge{font-size:11px;border-radius:4px;padding:2px 7px;background:#eef;color:#2540a0;white-space:nowrap;}
+.filler-word{font-weight:600;}
+.filler-reason{color:#777;font-size:12px;}
+.filler-sentence{color:#444;font-size:12px;background:#fafafa;padding:6px 8px;border-radius:4px;margin-top:4px;}
+.filler-sentence mark{background:#ffe08a;padding:0 1px;border-radius:2px;}
+</style>
+<div style="background:white;border-bottom:1px solid var(--gray-200);padding:6px 24px;">
+  <div style="max-width:1400px;margin:0 auto;display:flex;gap:8px;align-items:center;">
+    <button id="tab-review" class="view-tab active" onclick="switchTab('review')">&#128221; 逐句審稿</button>
+    <button id="tab-filler" class="view-tab" onclick="switchTab('filler')">&#129529; 贅字清單</button>
+    <span style="font-size:11px;color:var(--gray-400);margin-left:8px;">贅字清單僅供檢視，不影響剪輯</span>
+  </div>
+</div>
+
 <!-- Filter Bar -->
 <div class="filter-bar">
   <div class="filter-inner">
@@ -1181,13 +1189,6 @@ __SPEAKER_STYLES__
   </div>
 </div>
 
-<!-- Non-speech vocal section -->
-<section class="nsv-section">
-  <h2>非語音聲響（Gemini 偵測）</h2>
-  <p class="nsv-help">主持人句前/句尾的清喉嚨、清鼻子聲。逐筆確認是否刪除。</p>
-  <div id="nsv-list"></div>
-</section>
-
 <!-- Selection Popup (appears on mouse-drag select) -->
 <div class="selection-popup" id="selection-popup" style="display:none;">
   <span class="sel-count" id="sel-count">0 selected</span>
@@ -1197,6 +1198,9 @@ __SPEAKER_STYLES__
 
 <!-- Transcript -->
 <div class="transcript" id="transcript"></div>
+
+<!-- Filler inspection view (read-only; does not affect the cut) -->
+<div class="filler-view" id="filler-view" style="display:none;max-width:1400px;margin:0 auto;padding:16px 24px;"></div>
 
 <!-- Scroll to top -->
 <button class="scroll-top" id="scroll-top" onclick="window.scrollTo({top:0,behavior:'smooth'})">&#8593;</button>
@@ -1355,6 +1359,8 @@ const nsvTouched = new Set();
 segments.forEach(seg => {
   if (seg.feIdx !== undefined) fineEditsOriginal.add(seg.feIdx);
 });
+
+
 
 // Sync legacy Sets from segments — call after any segment state change
 function syncLegacySets() {
@@ -4684,167 +4690,9 @@ document.addEventListener('mousedown', function(e) {
 });
 
 // === Non-speech vocal review section ===
-const nsvEdits = __NSV_EDITS__;  // injected by generate_review_enhanced.js
+const nsvEdits = [];  // injected by generate_review_enhanced.js
 // nsvTouched is declared earlier in the script (near fineEditsDisabled) so
 // it's accessible from restoreState() — see the comment there.
-
-function renderNsvList() {
-  const root = document.getElementById('nsv-list');
-  if (!root) return;
-  root.replaceChildren();
-  if (!nsvEdits || nsvEdits.length === 0) {
-    const empty = document.createElement('p');
-    empty.className = 'nsv-empty';
-    empty.textContent = '此集沒有偵測到清喉嚨/清鼻子事件。';
-    root.appendChild(empty);
-    return;
-  }
-  for (const nsv of nsvEdits) {
-    // Four visual states:
-    //   untouched + disabled    → neutral (no class) — user hasn't decided
-    //   untouched + enabled     → nsv-auto-confirmed (high-conf auto-deleted
-    //                              by detector via auto_delete_threshold)
-    //   touched + enabled       → nsv-confirmed (user confirmed delete)
-    //   touched + disabled      → nsv-kept (user explicitly chose to keep)
-    const seg = segments.find(s => s.feIdx === nsv.feIdx);
-    const touched = nsvTouched.has(nsv.feIdx);
-    const curEnabled = seg ? seg.enabled : false;
-    let extraClass = '';
-    if (touched) extraClass = curEnabled ? ' nsv-confirmed' : ' nsv-kept';
-    else if (curEnabled) extraClass = ' nsv-auto-confirmed';
-    const card = document.createElement('div');
-    card.className = 'nsv-card' + extraClass;
-    card.dataset.feIdx = nsv.feIdx;
-
-    const head = document.createElement('div');
-    head.className = 'nsv-head';
-    const t = document.createElement('span');
-    t.className = 'nsv-time';
-    t.textContent = nsv.start.toFixed(2) + '-' + nsv.end.toFixed(2) + 's';
-    head.appendChild(t);
-    const lbl = document.createElement('span');
-    lbl.className = 'nsv-type type-' + nsv.subtype;
-    lbl.textContent = nsv.subtypeLabel;
-    head.appendChild(lbl);
-    const conf = document.createElement('span');
-    conf.className = 'nsv-conf';
-    conf.textContent = 'conf ' + nsv.confidence.toFixed(2);
-    head.appendChild(conf);
-    if (nsv.filter_decision === 'boundary_too_tight') {
-      const w = document.createElement('span');
-      w.className = 'nsv-warning';
-      w.textContent = '⚠ 邊界過緊，剪輯易產生 artifact';
-      head.appendChild(w);
-    }
-    // Surface the auto-confirmed state — without this the user has no visual
-    // cue that a high-confidence event was auto-enabled by the detector.
-    if (!touched && curEnabled) {
-      const a = document.createElement('span');
-      a.className = 'nsv-auto-tag';
-      a.textContent = '🤖 高信心自動勾選';
-      head.appendChild(a);
-    }
-    card.appendChild(head);
-
-    if (nsv.description) {
-      const d = document.createElement('p');
-      d.className = 'nsv-desc';
-      d.textContent = nsv.description;
-      card.appendChild(d);
-    }
-
-    const actions = document.createElement('div');
-    actions.className = 'nsv-actions';
-    const play = document.createElement('button');
-    play.textContent = '▶ 試聽';
-    play.addEventListener('click', () => nsvPlayClip(nsv.start, nsv.end));
-    actions.appendChild(play);
-    const confirm = document.createElement('button');
-    confirm.className = 'btn-confirm';
-    confirm.textContent = '✅ 確認刪除';
-    confirm.addEventListener('click', () => setNsvDecision(nsv.feIdx, true));
-    actions.appendChild(confirm);
-    const keep = document.createElement('button');
-    keep.className = 'btn-keep';
-    keep.textContent = '❌ 保留';
-    keep.addEventListener('click', () => setNsvDecision(nsv.feIdx, false));
-    actions.appendChild(keep);
-    card.appendChild(actions);
-
-    root.appendChild(card);
-  }
-}
-
-function setNsvDecision(feIdx, enable) {
-  // Mirror toggleFineEdit()'s sync pattern so the in-flight playback/skip
-  // cache and stats stay consistent. Just mutating seg.enabled without
-  // invalidateSkipRanges() leaves cut-mode playing the old skip plan.
-  const matching = segments.filter(s => s.feIdx === feIdx);
-  if (matching.length === 0) return;
-
-  const newEnabled = !!enable;
-  // Capture both pieces of pre-action state for a clean undo:
-  //   - wasTouched: whether this card was already in nsvTouched
-  //   - segChanges: prior enabled state per matching segment
-  // Use a dedicated 'nsvDecision' undo type rather than 'segmentBatch' so
-  // the undo handler can also restore the touched set + refresh card class.
-  const wasTouched = nsvTouched.has(feIdx);
-  undoStack.push({
-    type: 'nsvDecision',
-    feIdx: feIdx,
-    wasTouched: wasTouched,
-    segChanges: matching.map(seg => ({ id: seg.id, wasEnabled: seg.enabled })),
-  });
-  // Mark as explicitly decided — this is what distinguishes a user-touched
-  // card from the default-preserved (untouched) state in the export log.
-  nsvTouched.add(feIdx);
-  matching.forEach(seg => { seg.enabled = newEnabled; });
-
-  syncLegacySets();
-  if (typeof invalidateSkipRanges === 'function') invalidateSkipRanges();
-
-  // If cut-mode is playing, reschedule skip to reflect the change immediately
-  const _nsvAudio = document.getElementById('audio-original');
-  if (typeof cutMode !== 'undefined' && cutMode && _nsvAudio && !_nsvAudio.paused
-      && typeof skipIfNeeded === 'function') {
-    skipIfNeeded();
-  }
-
-  // Rebuild affected sentence rows (NSV has empty deleteText so this is a
-  // near-no-op for visual content, but keeps the contract symmetric with
-  // toggleFineEdit and future-proofs us against richer NSV rendering)
-  const affectedSentIdxs = new Set(matching.map(seg => seg.sentenceIdx));
-  for (const sIdx of affectedSentIdxs) {
-    const s = sentencesData.find(s => s.idx === sIdx);
-    if (s && typeof rebuildRowText === 'function') rebuildRowText(s);
-  }
-
-  if (typeof updateStats === 'function') updateStats();
-
-  const card = document.querySelector('.nsv-card[data-fe-idx="' + feIdx + '"]');
-  if (card) {
-    card.classList.toggle('nsv-confirmed', newEnabled);
-    card.classList.toggle('nsv-kept', !newEnabled);
-  }
-  if (typeof autoSave === 'function') autoSave();
-}
-
-function nsvPlayClip(start, end) {
-  const audio = document.getElementById('audio-original');
-  if (!audio) return;
-  audio.currentTime = Math.max(0, start - 0.6);
-  audio.play();
-  const stopAt = end + 0.6;
-  const onTime = () => {
-    if (audio.currentTime >= stopAt) {
-      audio.pause();
-      audio.removeEventListener('timeupdate', onTime);
-    }
-  };
-  audio.addEventListener('timeupdate', onTime);
-}
-
-renderNsvList();
 
 </script>
 
@@ -4909,6 +4757,111 @@ renderNsvList();
     <button class="mc-btn mc-btn-ok" onclick="confirmRestore()">Record</button>
   </div>
 </div>
+
+<script>
+// ===== 贅字清單分頁 (read-only inspection; reuses sentencesData + seekToTime) =====
+const FILLER_TYPE_LABELS = {
+  filler_start: '句首語助詞',
+  in_sentence_filler: '句中語助詞',
+  consecutive_filler: '連續語助詞',
+  stutter: '結巴',
+  in_sentence_repeat: '句中重複',
+  self_correction: '自我修正',
+  self_correction_rules: '自我修正',
+  single_filler: '純語助詞句',
+  residual_sentence: '殘句',
+  gemini_filler: '聲學語助詞',
+  speaker_tic: '口頭禪',
+  backchannel: '附和語'
+};
+
+let fillerActiveType = 'all';
+let _fillerItemsCache = null;
+
+function _escHtml(s){ return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
+function _fmtFillerTime(t){
+  if (typeof fmtDur === 'function') return fmtDur(t);
+  t = Math.max(0, Math.floor(t || 0));
+  const h = Math.floor(t/3600), m = Math.floor((t%3600)/60), s = t%60;
+  return (h>0 ? h+':'+String(m).padStart(2,'0') : ''+m) + ':' + String(s).padStart(2,'0');
+}
+
+function collectFillerItems(){
+  if (_fillerItemsCache) return _fillerItemsCache;
+  const items = [];
+  sentencesData.forEach(s => {
+    const edits = [];
+    if (s.fineEdit) edits.push(s.fineEdit);
+    if (s.extraFineEdits) Array.prototype.push.apply(edits, s.extraFineEdits);
+    edits.forEach(fe => {
+      if (!FILLER_TYPE_LABELS[fe.type]) return;   // skip silence/silence_merged etc.
+      const ts = (fe.ds != null) ? fe.ds : s.startTime;
+      items.push({ ts, type: fe.type, word: fe.deleteText || '',
+                   reason: fe.reason || '', sentence: s.text || '', speaker: s.speaker || '' });
+    });
+  });
+  items.sort((a,b) => a.ts - b.ts);
+  _fillerItemsCache = items;
+  return items;
+}
+
+function setFillerType(t){ fillerActiveType = t; renderFillerList(); }
+
+function renderFillerList(){
+  const items = collectFillerItems();
+  const counts = {};
+  items.forEach(it => counts[it.type] = (counts[it.type]||0) + 1);
+
+  let chips = '<span class="filler-chip' + (fillerActiveType==='all'?' active':'') +
+              '" onclick="setFillerType(\'all\')">全部 ' + items.length + '</span>';
+  Object.keys(FILLER_TYPE_LABELS).forEach(t => {
+    if (!counts[t]) return;
+    chips += '<span class="filler-chip' + (fillerActiveType===t?' active':'') +
+             '" onclick="setFillerType(\'' + t + '\')">' + FILLER_TYPE_LABELS[t] + ' ' + counts[t] + '</span>';
+  });
+
+  const shown = items.filter(it => fillerActiveType==='all' || it.type===fillerActiveType);
+  let rows = '';
+  shown.forEach(it => {
+    const label = FILLER_TYPE_LABELS[it.type] || it.type;
+    let sent = _escHtml(it.sentence);
+    if (it.word){
+      const w = _escHtml(it.word);
+      const p = sent.indexOf(w);
+      if (p >= 0) sent = sent.slice(0,p) + '<mark>' + w + '</mark>' + sent.slice(p+w.length);
+    }
+    rows += '<div class="filler-row">' +
+      '<div class="filler-main">' +
+        '<span class="filler-time" onclick="seekToTime(' + it.ts + ')">' + _fmtFillerTime(it.ts) + '</span>' +
+        '<span class="filler-badge">' + label + '</span>' +
+        (it.word ? '<span class="filler-word">「' + _escHtml(it.word) + '」</span>' : '') +
+        '<span class="filler-reason">' + _escHtml(it.reason) + '</span>' +
+      '</div>' +
+      '<div class="filler-sentence">[' + _escHtml(it.speaker) + '] ' + sent + '</div>' +
+    '</div>';
+  });
+
+  document.getElementById('filler-view').innerHTML =
+    '<div class="filler-head">共 <b>' + items.length + '</b> 筆贅字（僅供檢視，不影響剪輯）。點時間戳可跳轉試聽。</div>' +
+    '<div class="filler-chips">' + chips + '</div>' +
+    '<div class="filler-list">' + (rows || '<div style="padding:20px;color:#888;">沒有偵測到贅字</div>') + '</div>';
+}
+
+function switchTab(name){
+  const isFiller = name === 'filler';
+  const tx = document.getElementById('transcript');
+  const fv = document.getElementById('filler-view');
+  const fb = document.querySelector('.filter-bar');
+  const sp = document.getElementById('speaker-panel');
+  if (tx) tx.style.display = isFiller ? 'none' : '';
+  if (fb) fb.style.display = isFiller ? 'none' : '';
+  if (sp && sp.parentElement) sp.parentElement.style.display = isFiller ? 'none' : '';
+  if (fv) fv.style.display = isFiller ? 'block' : 'none';
+  document.getElementById('tab-review').classList.toggle('active', !isFiller);
+  document.getElementById('tab-filler').classList.toggle('active', isFiller);
+  if (isFiller) renderFillerList();
+}
+</script>
 
 </body>
 </html>

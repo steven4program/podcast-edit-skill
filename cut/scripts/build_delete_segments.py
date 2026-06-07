@@ -29,9 +29,44 @@ for idx, ws, we in sentences:
         ranges.append((actual[ws]["start"], actual[we]["end"], f"sentence_delete S{idx}"))
 
 fine = json.loads((base / "2_analysis/fine_analysis.json").read_text(encoding="utf-8"))
+
+# Safe-cut overlay: when safe_cut_plan.json exists, the planner has opinions
+# about a SUBSET of fine edits (filler / stutter / self_correction etc).
+# Silence handling stays with the existing pipeline — those edits are not in
+# the plan and pass through unconditionally. For plan-mentioned edits, only
+# 'auto' verdict gets applied; 'review' / 'skip' are pre-disabled.
+safe_plan_path = base / "2_analysis/safe_cut_plan.json"
+plan_verdict = {}    # fe_idx → 'auto' | 'review' | 'skip'
+snapped_by_idx = {}
+if safe_plan_path.exists():
+    plan = json.loads(safe_plan_path.read_text(encoding="utf-8"))
+    for c in plan.get("candidates", []):
+        idx = c.get("feIdx")
+        if idx is None:
+            continue
+        plan_verdict[idx] = c.get("verdict")
+        # Prefer the inner-snapped (Tier-2 breath-preserving) cut points when
+        # available; fall back to the outer snap if not.
+        inner = c.get("snapped_inner")
+        if inner and inner.get("applied"):
+            snapped_by_idx[idx] = (inner["start"], inner["end"])
+        elif c.get("snapped"):
+            snapped_by_idx[idx] = (c["snapped"]["start"], c["snapped"]["end"])
+    s = plan.get("summary", {})
+    print(f"safe-cut overlay: {s.get('auto',0)}/{s.get('total',0)} filler-class auto-applied; {s.get('silence_passthrough',0)} silence edits via existing pipeline")
+
 for e in fine["edits"]:
-    if e.get("deleteStart") is not None and e.get("deleteEnd") is not None:
-        ranges.append((e["deleteStart"], e["deleteEnd"], f"fine_{e.get('type','?')}"))
+    if e.get("deleteStart") is None or e.get("deleteEnd") is None:
+        continue
+    fe_idx = e.get("idx")
+    # If the planner has an opinion, honor it; otherwise pass through.
+    if fe_idx in plan_verdict and plan_verdict[fe_idx] != "auto":
+        continue
+    if fe_idx in snapped_by_idx:
+        ds, de = snapped_by_idx[fe_idx]
+    else:
+        ds, de = e["deleteStart"], e["deleteEnd"]
+    ranges.append((ds, de, f"fine_{e.get('type','?')}"))
 
 ranges.sort()
 merged = []
