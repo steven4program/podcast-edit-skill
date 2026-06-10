@@ -22,6 +22,54 @@
 
 const fs = require('fs');
 const path = require('path');
+const { execFileSync } = require('child_process');
+
+// ===== Waveform peaks (precomputed with ffmpeg) =====
+// Decode audio to low-rate mono PCM, then bucket to PEAKS_PER_SECOND max-amplitude
+// bytes (0-255). Returns { peaksPerSecond, duration, data(base64) } or null on failure
+// (frontend degrades gracefully: no waveform, everything else works).
+const PEAKS_PER_SECOND = 20;
+const DECODE_RATE = 4000; // ffmpeg output sample rate; DECODE_RATE/PEAKS_PER_SECOND samples per peak
+
+function computeWaveformPeaks(audioFile, outputFile) {
+  // Resolve a readable path: try as-is (relative to CWD), then relative to HTML dir.
+  let src = audioFile;
+  if (!fs.existsSync(src)) {
+    const alt = path.resolve(path.dirname(outputFile), audioFile);
+    if (fs.existsSync(alt)) src = alt;
+  }
+  if (!fs.existsSync(src)) {
+    console.warn(`   ⚠️  波形：找不到音檔 ${audioFile}，略過波形`);
+    return null;
+  }
+  try {
+    const pcm = execFileSync('ffmpeg', [
+      '-v', 'error', '-i', src, '-ac', '1', '-ar', String(DECODE_RATE),
+      '-f', 's16le', '-'
+    ], { maxBuffer: 1024 * 1024 * 1024 }); // up to 1GB raw PCM
+
+    const sampleCount = Math.floor(pcm.length / 2);
+    const bucket = Math.max(1, Math.round(DECODE_RATE / PEAKS_PER_SECOND));
+    const peakCount = Math.ceil(sampleCount / bucket);
+    const peaks = Buffer.alloc(peakCount);
+    for (let i = 0; i < peakCount; i++) {
+      let max = 0;
+      const start = i * bucket;
+      const end = Math.min(start + bucket, sampleCount);
+      for (let j = start; j < end; j++) {
+        const v = Math.abs(pcm.readInt16LE(j * 2));
+        if (v > max) max = v;
+      }
+      peaks[i] = Math.min(255, Math.round((max / 32768) * 255));
+    }
+    const duration = sampleCount / DECODE_RATE;
+    console.log(`   🌊 波形：${peakCount} 點 @ ${PEAKS_PER_SECOND}/s，時長 ${duration.toFixed(1)}s`);
+    return { peaksPerSecond: PEAKS_PER_SECOND, duration, data: peaks.toString('base64') };
+  } catch (e) {
+    console.warn(`   ⚠️  波形：ffmpeg 失敗（${e.message.split('\n')[0]}），略過波形`);
+    return null;
+  }
+}
 
 // ===== Argument parsing =====
 const args = {};
@@ -369,6 +417,10 @@ template = template.replace(/__AUDIO_SRC__/g, audioSrc);
 template = template.replace(/__AUDIO_SRC_RAW__/g, audioSrcRaw);
 template = template.replace(/__TITLE__/g, title);
 template = template.replace('__GEN_TIMESTAMP__', String(Date.now()));
+
+// Waveform peaks (precomputed; null → frontend hides waveform)
+const waveform = computeWaveformPeaks(audioSrc, outputFile);
+template = template.replace('__WAVEFORM_PEAKS__', JSON.stringify(waveform));
 
 fs.writeFileSync(outputFile, template);
 const sizeKB = Math.round(fs.statSync(outputFile).size / 1024);
