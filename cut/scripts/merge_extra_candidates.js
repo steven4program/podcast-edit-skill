@@ -106,23 +106,67 @@ if (bc && Array.isArray(bc.candidates)) {
 
 const gem = maybeLoad('gemini_filler_candidates.json');
 if (gem && Array.isArray(gem.candidates)) {
+  // Gemini estimates timestamps by ear (±0.3-1 s error). When the candidate
+  // was matched to an ASR word (wordIdx), use that word's precise timestamps
+  // instead, extended to the adjacent word boundaries like rule-based fillers
+  // (see run_fine_analysis.js boundary extension / editing-rules 2-filler).
+  // Unmatched candidates keep Gemini's coarse times but are forced to review.
+  const MAX_EXTEND_GAP = 0.20;
+  let actualWords = null;
+  const wordsPath = path.join(analysisDir, '..', '1_transcript', 'subtitles_words.json');
+  if (fs.existsSync(wordsPath)) {
+    actualWords = JSON.parse(fs.readFileSync(wordsPath, 'utf8'))
+      .filter(w => !w.isGap && !w.isSpeakerLabel);
+  } else {
+    console.warn(`⚠️  ${wordsPath} not found — gemini_filler timestamps NOT snapped to ASR words`);
+  }
+  let snapped = 0;
+  let unmatched = 0;
   for (const c of gem.candidates) {
+    let deleteStart = c.deleteStart;
+    let deleteEnd = c.deleteEnd;
+    let enabled = c.enabled;
+    const hasWord = c.wordIdx !== null && c.wordIdx !== undefined
+      && actualWords && actualWords[c.wordIdx];
+    if (hasWord) {
+      const w = actualWords[c.wordIdx];
+      deleteStart = w.start;
+      deleteEnd = w.end;
+      const prev = actualWords[c.wordIdx - 1];
+      if (prev) {
+        const gap = deleteStart - prev.end;
+        if (gap >= 0 && gap < MAX_EXTEND_GAP) deleteStart = prev.end;
+      }
+      const next = actualWords[c.wordIdx + 1];
+      if (next) {
+        const gap = next.start - deleteEnd;
+        if (gap >= 0 && gap < MAX_EXTEND_GAP) deleteEnd = next.start;
+      }
+      snapped++;
+    } else if (actualWords) {
+      enabled = false; // no ASR anchor → never auto-delete on Gemini's clock alone
+      unmatched++;
+    }
     newEdits.push({
       idx: nextIdx++,
       sentenceIdx: null,  // Gemini doesn't map to sentenceIdx; UI handles by time
       type: 'gemini_filler',
       rule: `2.8-gemini ${c.category}`,
-      wordRange: c.wordIdx !== null && c.wordIdx !== undefined ? [c.wordIdx, c.wordIdx] : undefined,
+      wordRange: hasWord ? [c.wordIdx, c.wordIdx] : undefined,
       deleteText: c.deleteText,
       keepText: '',
-      deleteStart: c.deleteStart,
-      deleteEnd: c.deleteEnd,
+      deleteStart: parseFloat(deleteStart.toFixed(3)),
+      deleteEnd: parseFloat(deleteEnd.toFixed(3)),
       reason: c.reason,
-      enabled: c.enabled,
+      enabled,
       confidence: c.confidence,
       category: c.category,
     });
     stats.gemini_filler++;
+  }
+  if (actualWords) {
+    console.log(`   gemini_filler timestamps: ${snapped} snapped to ASR words, `
+      + `${unmatched} unmatched (forced review)`);
   }
 }
 

@@ -61,12 +61,170 @@ sys.stderr.reconfigure(line_buffering=True)
 # inaudible, long enough to avoid clicks from a hard zero-crossing.
 MUTE_FADE_SEC = 0.008
 
+# ── Seam crossfades (replaces the old back-to-back afade in/out) ──
+# Back-to-back fades leave an audible energy dip at every seam; an equal-power
+# overlap crossfade doesn't. The overlap length adapts per seam: as long as
+# the quiet audio available on both sides allows (up to 60 ms), and only 8 ms
+# (click protection) when the seam touches voiced audio — long crossfades over
+# speech smear the next word's onset and double the voice.
+#
+# Multitrack constraint: every track is cut at the same global timestamps and
+# mixed afterwards, so the overlap length at seam k MUST be identical across
+# tracks or the outputs drift out of sync. Crossfade lengths are therefore
+# computed once (min quiet run over all tracks) and shared.
+XFADE_MAX_SEC = 0.06
+XFADE_MIN_SEC = 0.008
+QUIET_PROBE_FRAME_SEC = 0.005
+# Absolute cap on the "quiet" threshold (-38 dBFS): protects against a track
+# with so little true silence that its noise-floor estimate lands on speech.
+QUIET_ABS_CEILING = 10 ** (-38 / 20)
+
 
 def calc_fade_duration(segment_duration):
     if segment_duration < 0.3:
         return 0.0
     fade = min(segment_duration * 0.08, 0.3)
     return max(fade, 0.03)
+
+
+def estimate_wav_noise_floor(wav_path, n_windows=120, win_sec=0.05):
+    """10th-percentile RMS over evenly spaced 50 ms windows of a WAV file."""
+    rms_vals = []
+    with sf.SoundFile(str(wav_path)) as snd:
+        total = len(snd)
+        win = int(win_sec * snd.samplerate)
+        if total < win * 4:
+            return 1e-4
+        step = max((total - win) // n_windows, win)
+        for pos in range(0, total - win, step):
+            snd.seek(pos)
+            data = snd.read(win, dtype="float32", always_2d=True).mean(axis=1)
+            rms_vals.append(float(np.sqrt(np.mean(data ** 2))))
+    if not rms_vals:
+        return 1e-4
+    return max(float(np.percentile(rms_vals, 10)), 1e-5)
+
+
+def _quiet_run_sec(x, sr, threshold, from_end, max_sec=XFADE_MAX_SEC):
+    """Consecutive quiet duration (s) at the head/tail of mono signal x."""
+    frame = max(1, int(QUIET_PROBE_FRAME_SEC * sr))
+    n = min(len(x) // frame, int(max_sec / QUIET_PROBE_FRAME_SEC))
+    run = 0
+    for k in range(n):
+        if from_end:
+            seg = x[len(x) - (k + 1) * frame: len(x) - k * frame]
+        else:
+            seg = x[k * frame:(k + 1) * frame]
+        if float(np.sqrt(np.mean(seg ** 2))) <= threshold:
+            run += 1
+        else:
+            break
+    return run * QUIET_PROBE_FRAME_SEC
+
+
+def compute_seam_crossfades(track_raw_wavs, track_keeps):
+    """One crossfade length per seam, shared by every track.
+
+    track_raw_wavs: {speaker: Path}  (decoded raw WAV, track-local timeline)
+    track_keeps:    {speaker: [(start, end), ...]}
+
+    Returns list of crossfade seconds (len = n_seams), or None when the
+    tracks' keep-segment counts differ (offset edge case) — caller falls back
+    to the legacy per-segment fade path which never desyncs.
+    """
+    counts = {spk: len(keeps) for spk, keeps in track_keeps.items()}
+    if len(set(counts.values())) != 1:
+        print(f"⚠️  keep-segment counts differ across tracks {counts}; "
+              f"falling back to legacy per-segment fades (no crossfade).")
+        return None
+    n_seams = next(iter(counts.values())) - 1
+    if n_seams <= 0:
+        return []
+
+    floors = {}
+    handles = {}
+    for spk, wav in track_raw_wavs.items():
+        floors[spk] = min(estimate_wav_noise_floor(wav) * (10 ** (6.0 / 20)),  # floor+6dB
+                          QUIET_ABS_CEILING)
+        handles[spk] = sf.SoundFile(str(wav))
+
+    probe = XFADE_MAX_SEC  # probe window on each side of the seam
+    xfades = []
+    try:
+        for k in range(n_seams):
+            quiet = probe
+            for spk, snd in handles.items():
+                sr = snd.samplerate
+                seg_end = track_keeps[spk][k][1]
+                nxt_start = track_keeps[spk][k + 1][0]
+                # tail of kept segment k
+                a = max(0, int((seg_end - probe) * sr))
+                snd.seek(a)
+                tail = snd.read(int(probe * sr), dtype="float32", always_2d=True).mean(axis=1)
+                # head of kept segment k+1
+                b = max(0, int(nxt_start * sr))
+                snd.seek(min(b, len(snd)))
+                head = snd.read(int(probe * sr), dtype="float32", always_2d=True).mean(axis=1)
+                q = min(_quiet_run_sec(tail, sr, floors[spk], from_end=True),
+                        _quiet_run_sec(head, sr, floors[spk], from_end=False))
+                quiet = min(quiet, q)
+            # Never longer than half the shorter neighbouring segment.
+            seg_caps = []
+            for spk in track_keeps:
+                s0, e0 = track_keeps[spk][k]
+                s1, e1 = track_keeps[spk][k + 1]
+                seg_caps.append(min(e0 - s0, e1 - s1) * 0.5)
+            xfade = min(max(quiet, XFADE_MIN_SEC), XFADE_MAX_SEC, min(seg_caps))
+            xfades.append(max(xfade, 0.0))
+    finally:
+        for snd in handles.values():
+            snd.close()
+
+    at_min = sum(1 for x in xfades if x <= XFADE_MIN_SEC + 1e-4)
+    med = sorted(xfades)[len(xfades) // 2] if xfades else 0
+    print(f"   seam crossfades: {len(xfades)} seams, median {med*1000:.0f} ms, "
+          f"{at_min} voiced seams at {XFADE_MIN_SEC*1000:.0f} ms minimum")
+    return xfades
+
+
+def concat_wavs_crossfade(segment_files, out_wav, xfade_secs):
+    """Streaming equal-power crossfade concat (PCM_16 WAV out).
+
+    xfade_secs[k] is the overlap between segment k and k+1; identical lists
+    across tracks keep multitrack outputs sample-aligned (modulo ±1-sample
+    extraction rounding, which never accumulates because every overlap is
+    recomputed from the shared list).
+    """
+    with sf.SoundFile(str(segment_files[0])) as snd0:
+        sr = snd0.samplerate
+        ch = snd0.channels
+
+    with sf.SoundFile(str(out_wav), "w", samplerate=sr, channels=ch,
+                       subtype="PCM_16") as writer:
+        tail = None  # held-back overlap from the previous segment
+        for k, seg_path in enumerate(segment_files):
+            data, _sr = sf.read(str(seg_path), dtype="float32", always_2d=True)
+            if tail is not None and len(tail) > 0:
+                # xfade is capped at half the shorter neighbouring segment, so
+                # data is always longer than the overlap.
+                n = min(len(tail), len(data))
+                if n >= 2:
+                    ramp = np.linspace(0.0, 1.0, n, dtype=np.float32)[:, None]
+                    mixed = tail[:n] * np.sqrt(1.0 - ramp) + data[:n] * np.sqrt(ramp)
+                    data = np.concatenate([mixed, data[n:]])
+                else:
+                    data = np.concatenate([tail, data])
+            if k < len(segment_files) - 1:
+                n_next = int(round(xfade_secs[k] * sr))
+                n_next = max(0, min(n_next, len(data) - 1))
+                if n_next > 0:
+                    writer.write(data[:len(data) - n_next])
+                    tail = data[len(data) - n_next:]
+                else:
+                    writer.write(data)
+                    tail = None
+            else:
+                writer.write(data)
 
 
 def parse_kv_pairs(items, value_type=str):
@@ -218,27 +376,33 @@ def decode_to_wav(input_path, out_wav):
     )
 
 
-def extract_keep_segments(src_wav, keep_segs, work_dir, prefix):
-    """Cut keep_segs out of src_wav with adaptive fades; return list of segment file paths."""
+def extract_keep_segments(src_wav, keep_segs, work_dir, prefix, with_fades=False):
+    """Cut keep_segs out of src_wav; return list of segment file paths.
+
+    with_fades=False (default): plain sample-range copies — seams are handled
+    by the equal-power crossfade in concat_wavs_crossfade.
+    with_fades=True: legacy adaptive afade in/out per segment, used only when
+    crossfades can't be shared across tracks (keep-segment count mismatch).
+    """
     out_files = []
     for i, (start, end) in enumerate(keep_segs):
         seg_dur = end - start
         seg_path = work_dir / f"{prefix}_seg_{i:05d}.wav"
 
-        is_first = (i == 0)
-        is_last = (i == len(keep_segs) - 1)
-        fade_in = 0.0 if is_first else calc_fade_duration(seg_dur)
-        fade_out = 0.0 if is_last else calc_fade_duration(seg_dur)
-        if fade_in + fade_out > seg_dur * 0.6:
-            r = (seg_dur * 0.6) / (fade_in + fade_out)
-            fade_in *= r
-            fade_out *= r
-
         filters = []
-        if fade_in > 0:
-            filters.append(f"afade=t=in:d={fade_in:.3f}")
-        if fade_out > 0:
-            filters.append(f"afade=t=out:st={seg_dur - fade_out:.3f}:d={fade_out:.3f}")
+        if with_fades:
+            is_first = (i == 0)
+            is_last = (i == len(keep_segs) - 1)
+            fade_in = 0.0 if is_first else calc_fade_duration(seg_dur)
+            fade_out = 0.0 if is_last else calc_fade_duration(seg_dur)
+            if fade_in + fade_out > seg_dur * 0.6:
+                r = (seg_dur * 0.6) / (fade_in + fade_out)
+                fade_in *= r
+                fade_out *= r
+            if fade_in > 0:
+                filters.append(f"afade=t=in:d={fade_in:.3f}")
+            if fade_out > 0:
+                filters.append(f"afade=t=out:st={seg_dur - fade_out:.3f}:d={fade_out:.3f}")
 
         cmd = ["ffmpeg", "-v", "quiet",
                "-ss", f"{start:.6f}", "-i", str(src_wav),
@@ -246,7 +410,10 @@ def extract_keep_segments(src_wav, keep_segs, work_dir, prefix):
         if filters:
             cmd += ["-af", ",".join(filters)]
         else:
-            cmd += ["-c", "copy"]
+            # NOT -c copy: stream copy cuts at packet boundaries (tens of ms
+            # off), which would desync tracks under the shared-crossfade
+            # design. PCM re-encode is lossless and sample-accurate.
+            cmd += ["-c:a", "pcm_s16le"]
         cmd += ["-y", str(seg_path)]
         subprocess.run(cmd, check=True)
         out_files.append(seg_path)
@@ -646,7 +813,12 @@ def main():
     per_track_cut_wavs = {}  # speaker -> Path (cut, no loudnorm yet)
     per_track_lufs = {}      # speaker -> float
 
-    # --- Phase 1: per-track cut → cut WAV (no loudnorm) ---
+    # --- Phase 1a: decode every track + apply mutes + compute keep segments ---
+    # All tracks are decoded up front so seam crossfade lengths can be computed
+    # ONCE from all tracks' audio (they must be identical across tracks to keep
+    # the outputs sample-aligned for the mix).
+    track_raw_wavs = {}
+    track_keeps = {}
     for speaker, audio_path in tracks.items():
         print(f"=== {speaker} ===")
         audio_path = Path(audio_path)
@@ -656,7 +828,6 @@ def main():
         print(f"   Duration {duration:.2f}s, offset {offset:.2f}s → {len(keep_segs)} keep segments")
 
         raw_wav = work_dir / f"{speaker}_raw.wav"
-        cut_wav = work_dir / f"{speaker}_cut.wav"
         decode_to_wav(audio_path, raw_wav)
 
         # Apply per-track mutes from the cut plan, BEFORE keep-segment extraction.
@@ -672,17 +843,39 @@ def main():
             n_applied = apply_mutes_to_wav(raw_wav, shifted_mutes)
             print(f"   Muted {n_applied} regions on {speaker}'s track (fade {MUTE_FADE_SEC*1000:.0f} ms)")
 
-        seg_files = extract_keep_segments(raw_wav, keep_segs, work_dir, speaker)
-        concat_wavs(seg_files, cut_wav)
-        for sf in seg_files:
-            sf.unlink(missing_ok=True)
+        track_raw_wavs[speaker] = raw_wav
+        track_keeps[speaker] = keep_segs
+    print("")
+
+    # --- Phase 1b: shared seam crossfade plan (adaptive, sample-aligned) ---
+    print("🔗 Computing per-seam crossfade lengths (shared across tracks)...")
+    xfades = compute_seam_crossfades(track_raw_wavs, track_keeps)
+    print("")
+
+    # --- Phase 1c: per-track cut → cut WAV (no loudnorm) ---
+    for speaker in tracks:
+        raw_wav = track_raw_wavs[speaker]
+        keep_segs = track_keeps[speaker]
+        cut_wav = work_dir / f"{speaker}_cut.wav"
+
+        if xfades is not None:
+            seg_files = extract_keep_segments(raw_wav, keep_segs, work_dir, speaker)
+            concat_wavs_crossfade(seg_files, cut_wav, xfades)
+        else:
+            # Fallback: legacy per-segment fades + abutting concat (no overlap,
+            # can't desync even with mismatched keep counts).
+            seg_files = extract_keep_segments(raw_wav, keep_segs, work_dir, speaker,
+                                                with_fades=True)
+            concat_wavs(seg_files, cut_wav)
+        for seg in seg_files:
+            seg.unlink(missing_ok=True)
         raw_wav.unlink(missing_ok=True)
 
         lufs = measure_integrated_lufs(cut_wav)
         per_track_lufs[speaker] = lufs
         per_track_cut_wavs[speaker] = cut_wav
-        print(f"   Integrated loudness: {lufs} LUFS")
-        print("")
+        print(f"   {speaker}: cut → {cut_wav.name}, integrated loudness {lufs} LUFS")
+    print("")
 
     # --- Phase 2: per-track two-pass loudnorm (WAV, transparent) ---
     # Every track gets loudnormed to -16 LUFS. The solo MP3 is built from this,

@@ -534,15 +534,24 @@ Merge (merge_llm_fine.js → fine_analysis.json):
    - Auto-scans `fine_analysis.json` for edits with `_refinePoints`.
    - Calls `refine_boundaries.py` to find energy valleys (inter-syllable gaps) near the cut points.
    - Refined timestamps overwrite `fine_analysis.json`; original backed up to `fine_analysis_pre_refine.json`.
-5. **Safe-cut plan (三證據合議)**: run `safe_filler_cut.py` → `safe_cut_plan.json`.
+5. **Safe-cut plan (證據合議)**: run `safe_filler_cut.py` → `safe_cut_plan.json`.
    ```bash
    python3 "$SKILL_DIR/cut/scripts/safe_filler_cut.py" \
      --analysis-dir "$BASE_DIR/2_analysis" \
      --audio "$BASE_DIR/1_transcript/audio.mp3"
    ```
-   - For each fine edit, runs text / duration / silence-gap / audio-energy checks.
-   - Snaps cut points to nearest zero-crossing within ±20 ms.
-   - Emits a verdict: `auto` (apply), `review` (user must opt in), `skip` (cut point on speech).
+   - For each fine edit, runs text / duration / audio-energy / seam-continuity checks.
+   - Snaps each cut point to the nearest energy valley within ±80 ms (the
+     inter-syllable consonant closure — this is what makes connected-speech
+     fillers cuttable), then to the nearest zero-crossing within ±20 ms.
+   - Audio check passes when the cut point is near the silence floor OR sits in
+     a ≥6 dB valley.
+   - Seam continuity: when both sides of the seam are voiced, pitch (F0 jump
+     ≤2.5 semitones) and timbre (MFCC cosine ≥0.45) must be continuous across
+     the join, otherwise → `review`. Unvoiced seams are masked by definition.
+   - Detector-decided types (gemini_filler etc.) also go through the valley
+     snap + audio + continuity checks before they can be `auto`.
+   - Emits a verdict: `auto` (apply), `review` (user must opt in), `skip` (cut point on speech, no usable valley).
    - Caps `auto` cuts at 8 per 60 s window; surplus → `review`.
    - `build_delete_segments.py` and the review UI both honor this overlay — non-auto candidates are pre-disabled by default.
 

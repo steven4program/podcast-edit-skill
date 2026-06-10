@@ -28,18 +28,77 @@ sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
 
-# ── Tier 1: equal-power crossfade at every seam ──
-# Default 60 ms overlap with constant-power sqrt curves. This sounds
-# materially better than two back-to-back fades (which produce an audible
-# energy dip at the seam). Combined with Tier 2's inner-snap on cut points,
-# the result approaches manual editor's "invisible cut" feel.
+# ── Tier 1: equal-power crossfade at every seam, ADAPTIVE length ──
+# Constant-power sqrt curves sound materially better than two back-to-back
+# fades (which produce an audible energy dip at the seam). But a long
+# crossfade is only safe inside silence: when either side of the seam is
+# voiced, a 60 ms overlap smears the next word's consonant onset (the fade-in
+# curve attenuates it) and superimposes two different moments of the same
+# voice — an audible "doubled" splice. So each seam gets the longest
+# crossfade that still fits inside the quiet audio available on BOTH sides:
+# clamped to [8 ms, 60 ms]. Voiced-to-voiced seams (connected-speech filler
+# cuts) get the 8 ms minimum — just enough to avoid clicks.
 CROSSFADE_DEFAULT_S = 0.06
+CROSSFADE_MIN_S = 0.008
+QUIET_PROBE_FRAME_S = 0.005   # 5 ms frames when measuring quiet runs at seams
+
+
+def estimate_noise_floor(segment_files, max_seconds=60.0):
+    """10th-percentile RMS over 50 ms frames, sampled from segment heads.
+
+    Reads up to `max_seconds` of audio total (2 s per segment) — enough for a
+    stable quiet-room estimate without re-reading the whole episode.
+    """
+    import soundfile as sf
+    import numpy as np
+
+    frames = []
+    collected = 0.0
+    for f in segment_files:
+        if collected >= max_seconds:
+            break
+        try:
+            with sf.SoundFile(f) as snd:
+                n = min(len(snd), int(2.0 * snd.samplerate))
+                data = snd.read(n, dtype='float32', always_2d=True).mean(axis=1)
+                flen = int(0.05 * snd.samplerate)
+                k = len(data) // flen
+                if k > 0:
+                    rms = np.sqrt(np.mean(data[:k * flen].reshape(k, flen) ** 2, axis=1))
+                    frames.append(rms)
+                    collected += n / snd.samplerate
+        except Exception:
+            continue
+    if not frames:
+        return 1e-4
+    floor = float(np.percentile(np.concatenate(frames), 10))
+    return max(floor, 1e-5)
+
+
+def quiet_run_seconds(x, sr, threshold, from_end, max_s=0.08):
+    """Duration (s) of consecutive 5 ms frames below `threshold` at the head
+    (from_end=False) or tail (from_end=True) of mono signal x."""
+    import numpy as np
+    frame = max(1, int(QUIET_PROBE_FRAME_S * sr))
+    n = min(len(x) // frame, int(max_s / QUIET_PROBE_FRAME_S))
+    run = 0
+    for k in range(n):
+        if from_end:
+            seg = x[len(x) - (k + 1) * frame: len(x) - k * frame]
+        else:
+            seg = x[k * frame:(k + 1) * frame]
+        if np.sqrt(np.mean(seg ** 2)) <= threshold:
+            run += 1
+        else:
+            break
+    return run * QUIET_PROBE_FRAME_S
 
 
 def concat_with_crossfade(segment_files, output_file, crossfade_s):
     """Equal-power crossfade concat using soundfile + numpy.
 
-    Maintains constant power across the seam by ramping with sqrt curves.
+    `crossfade_s` is the per-seam MAXIMUM; each seam's actual overlap is
+    adapted down to the quiet audio available on both sides (min 8 ms).
     Memory: holds the whole audio in RAM (~600 MB for 1h 16k mono); fine for
     podcast lengths but would need streaming for hour-plus episodes.
     """
@@ -49,22 +108,37 @@ def concat_with_crossfade(segment_files, output_file, crossfade_s):
     if not segment_files:
         raise ValueError('no segments to concat')
 
+    noise_floor = estimate_noise_floor(segment_files)
+    # floor + 6 dB, but never above -38 dBFS — protects against audio with so
+    # little true silence that the floor estimate lands on speech.
+    quiet_threshold = min(noise_floor * (10 ** (6.0 / 20)), 10 ** (-38 / 20))
+
     first, sr = sf.read(segment_files[0], always_2d=False)
     out = first.astype(np.float32, copy=False)
     if len(segment_files) == 1:
         sf.write(output_file, out, sr)
         return
 
-    overlap_n = max(1, int(crossfade_s * sr))
+    max_overlap_n = max(1, int(crossfade_s * sr))
+    min_overlap_n = max(1, int(CROSSFADE_MIN_S * sr))
+    seam_lengths_ms = []
 
     for f in segment_files[1:]:
         nxt, _sr = sf.read(f, always_2d=False)
         nxt = nxt.astype(np.float32, copy=False)
-        n = min(overlap_n, len(out), len(nxt))
+
+        # Adapt the overlap to the quiet run available on each side of the seam.
+        tail_mono = out[-max_overlap_n * 2:] if out.ndim == 1 else out[-max_overlap_n * 2:].mean(axis=1)
+        head_mono = nxt[:max_overlap_n * 2] if nxt.ndim == 1 else nxt[:max_overlap_n * 2].mean(axis=1)
+        q_tail = quiet_run_seconds(tail_mono, sr, quiet_threshold, from_end=True, max_s=crossfade_s)
+        q_head = quiet_run_seconds(head_mono, sr, quiet_threshold, from_end=False, max_s=crossfade_s)
+        adaptive_n = int(min(q_tail, q_head) * sr)
+        n = min(max(adaptive_n, min_overlap_n), max_overlap_n, len(out), len(nxt))
         if n < 16:
-            # too short to crossfade — just concat
             out = np.concatenate([out, nxt])
+            seam_lengths_ms.append(0.0)
             continue
+        seam_lengths_ms.append(n / sr * 1000)
         # Equal-power (constant-power) crossfade
         ramp = np.linspace(0.0, 1.0, n, dtype=np.float32)
         fade_in = np.sqrt(ramp)
@@ -80,6 +154,11 @@ def concat_with_crossfade(segment_files, output_file, crossfade_s):
             mixed = tail + head
             out = np.concatenate([out[:-n], mixed, nxt[n:]])
 
+    if seam_lengths_ms:
+        short = sum(1 for m in seam_lengths_ms if m <= CROSSFADE_MIN_S * 1000 + 0.5)
+        print(f"   seams: {len(seam_lengths_ms)}, median crossfade "
+              f"{sorted(seam_lengths_ms)[len(seam_lengths_ms)//2]:.0f} ms, "
+              f"{short} voiced seams at {CROSSFADE_MIN_S*1000:.0f} ms minimum")
     sf.write(output_file, out, sr)
 
 
@@ -444,13 +523,15 @@ def main():
             if needs_fade:
                 fade_count += 1
         else:
-            # Direct copy — no fade, no volume compensation needed
+            # No fade / no volume compensation. NOT -c copy: stream copy cuts
+            # at packet boundaries (tens of ms off), defeating the planner's
+            # ms-level cut points. PCM re-encode is lossless and sample-accurate.
             cmd = [
                 'ffmpeg', '-v', 'quiet',
-                '-i', temp_wav,
                 '-ss', str(start),
-                '-to', str(end),
-                '-c', 'copy',
+                '-i', temp_wav,
+                '-t', str(end - start),
+                '-c:a', 'pcm_s16le',
                 '-y', output
             ]
 
